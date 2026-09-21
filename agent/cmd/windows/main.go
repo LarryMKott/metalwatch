@@ -60,8 +60,10 @@ func main() {
 	}
 	client.SetToken(token)
 
+	// 采集侧要拿版本号上报（否则 host_info 里的 agent_version 恒为 dev）
+	collect.SetVersion(version)
 	collector := collect.New()
-	go heartbeat.New(client, 10*time.Second).Run(ctx)
+	go heartbeat.New(client, report.HostIDFromEnv(), 10*time.Second).Run(ctx)
 
 	if err := report.Loop(ctx, client, collector, *interval); err != nil && ctx.Err() == nil {
 		fmt.Fprintln(os.Stderr, "上报循环退出:", err)

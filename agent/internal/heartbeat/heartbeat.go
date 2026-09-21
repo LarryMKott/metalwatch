@@ -20,16 +20,16 @@ type Worker struct {
 	hostID   int64
 }
 
-// New 构造心跳器。interval 建议为采集周期的 2~3 倍（默认 10s）。
-func New(sender Sender, interval time.Duration) *Worker {
+// New 构造心跳器。
+//
+// hostID 必须传服务端注册时分配的 host_id：心跳不带正确 host_id 会被服务端拒绝（403）。
+// interval 建议为采集周期的 2~3 倍，默认 20s。
+func New(sender Sender, hostID int64, interval time.Duration) *Worker {
 	if interval <= 0 {
 		interval = 20 * time.Second
 	}
-	return &Worker{sender: sender, interval: interval, started: time.Now()}
+	return &Worker{sender: sender, hostID: hostID, interval: interval, started: time.Now()}
 }
-
-// SetHostID 设置服务端分配的 host_id。
-func (w *Worker) SetHostID(id int64) { w.hostID = id }
 
 // Run 阻塞运行直到 ctx 取消。
 func (w *Worker) Run(ctx context.Context) {

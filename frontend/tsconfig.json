@@ -17,7 +17,7 @@
     "verbatimModuleSyntax": true,
     "useDefineForClassFields": true,
     "sourceMap": false,
-    "types": ["vite/client"],
+    "types": ["vite/client", "node"],
     "baseUrl": ".",
     "paths": {
       "@/*": ["src/*"]

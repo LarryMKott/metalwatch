@@ -93,13 +93,6 @@ func (r *AgentTokenRepo) FindActiveByHash(ctx context.Context, hash string) (*Ag
 	return &t, nil
 }
 
-// BindHost 把令牌绑定到主机（enroll 成功后调用）。
-func (r *AgentTokenRepo) BindHost(ctx context.Context, id, hostID int64, at time.Time) error {
-	q := r.s.Rebind(`UPDATE agent_token SET host_id = ?, enrolled_at = ? WHERE id = ?`)
-	_, err := r.s.ExecContext(ctx, q, hostID, formatTime(at), id)
-	return err
-}
-
 // Touch 记录令牌最近使用时间（限流与审计用）。
 func (r *AgentTokenRepo) Touch(ctx context.Context, id int64, at time.Time) error {
 	q := r.s.Rebind(`UPDATE agent_token SET last_used_at = ? WHERE id = ?`)

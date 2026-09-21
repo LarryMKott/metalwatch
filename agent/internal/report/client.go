@@ -154,9 +154,6 @@ func (c *Client) Heartbeat(ctx context.Context, hostID int64, uptime uint64) err
 	return c.do(ctx, http.MethodPost, "/api/v1/agent/heartbeat", c.token, body, nil)
 }
 
-// FlushSpool 立即尝试续传缓存数据。
-func (c *Client) FlushSpool(ctx context.Context) error { return c.flushSpool(ctx) }
-
 func (c *Client) flushSpool(ctx context.Context) error {
 	files, err := c.spoolFiles()
 	if err != nil || len(files) == 0 {

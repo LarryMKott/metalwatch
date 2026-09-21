@@ -20,7 +20,7 @@ func Loop(ctx context.Context, c *Client, collector *collect.Collector, interval
 		interval = 10 * time.Second
 	}
 
-	hostID := hostIDFromEnv()
+	hostID := HostIDFromEnv()
 	ticker := time.NewTicker(interval)
 	defer ticker.Stop()
 
@@ -46,9 +46,10 @@ func cycle(ctx context.Context, c *Client, collector *collect.Collector, hostID 
 	return c.Report(ctx, hostID, rep)
 }
 
-// hostIDFromEnv 读取注册时服务端分配的 host_id。
+// HostIDFromEnv 读取注册时服务端分配的 host_id。
 // 由 systemd EnvironmentFile 或 Windows 服务配置注入；缺失时返回 0，服务端会以 403 提示。
-func hostIDFromEnv() int64 {
+// 导出是因为心跳也需要同一个 host_id（见 heartbeat.New）。
+func HostIDFromEnv() int64 {
 	v, err := strconv.ParseInt(os.Getenv("METALWATCH_HOST_ID"), 10, 64)
 	if err != nil {
 		return 0

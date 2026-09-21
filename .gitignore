@@ -43,7 +43,8 @@ logs/
 
 # 本地/敏感配置
 .env
-.env.*
+.env.local
+.env.*.local
 !.env.example
 deploy/fpk/metalwatch/app/docker/.env
 secrets/

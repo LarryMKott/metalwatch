@@ -2,6 +2,7 @@
 import { computed, onMounted, onUnmounted } from 'vue'
 import { useAppStore } from '@/store'
 import { fromNow } from '@/utils/format'
+import { AlertSocket, type AlertEvent } from '@/utils/websocket'
 
 // 应用外壳：左侧导航 + 顶部状态 + 内容区。
 // 顶部状态直接反映后端 /healthz 与 /system/status，便于在飞牛应用面板之外自查。
@@ -21,12 +22,30 @@ const nav = [
 const driver = computed(() => store.currentDrivers?.metadata_driver ?? '-')
 
 let timer: number | null = null
+let socket: AlertSocket | null = null
+
+function onAlertEvent(evt: AlertEvent) {
+  // 收到关键事件就刷新顶部状态，让运维无需等待下一次轮询
+  if (evt.event === 'alert.firing' || evt.event === 'agent.offline' || evt.event === 'agent.online') {
+    void store.refreshSystem()
+  }
+}
+
 onMounted(async () => {
   await Promise.all([store.refreshSystem(), store.refreshBackends()])
   timer = window.setInterval(() => void store.refreshSystem(), 30_000)
+
+  // 实时告警 WS 端点由 W7 交付；默认按环境变量开关，避免开发期控制台刷重连错误
+  if (import.meta.env.VITE_WS_ENABLED === 'true') {
+    socket = new AlertSocket([onAlertEvent])
+    socket.connect()
+  }
 })
+
 onUnmounted(() => {
   if (timer !== null) window.clearInterval(timer)
+  socket?.close()
+  socket = null
 })
 </script>
 
