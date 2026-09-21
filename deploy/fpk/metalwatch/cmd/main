@@ -1,0 +1,42 @@
+#!/bin/bash
+# MetalWatch 生命周期：start / stop / status
+# start / stop 由飞牛 fnOS 依据 docker-project 资源处理，这里只做前置检查与状态判定。
+set -u
+
+CONTAINER_NAME="metalwatch-api"
+LOG="$TRIM_TEMP_LOGFILE"
+
+is_running() {
+  docker inspect -f '{{.State.Running}}' "$CONTAINER_NAME" 2>/dev/null | grep -q 'true'
+}
+
+case "${1:-}" in
+  start)
+    # 首次启动保证运行时目录存在（幂等）
+    for d in data data/secret mysql prometheus; do
+      mkdir -p "$TRIM_PKGVAR/$d"
+    done
+    if [ ! -f "$TRIM_PKGVAR/data/metalwatch.yaml" ]; then
+      echo "应用配置缺失，请先在应用设置中完成配置。" > "$LOG"
+      exit 1
+    fi
+    exit 0
+    ;;
+
+  stop)
+    exit 0
+    ;;
+
+  status)
+    if is_running; then
+      exit 0
+    fi
+    # 3 = 未运行
+    exit 3
+    ;;
+
+  *)
+    echo "未知操作: ${1:-}" > "$LOG"
+    exit 1
+    ;;
+esac

@@ -1,0 +1,24 @@
+#!/bin/bash
+# 升级后：执行数据库结构迁移，输出版本变更
+set -u
+
+LOG="$TRIM_TEMP_LOGFILE"
+
+echo "MetalWatch 升级：${TRIM_OLD_APPVER:-未知} -> ${TRIM_APPVER:-未知}" > "$LOG"
+
+# 等待数据库就绪（最多 120 秒）
+for _ in $(seq 1 60); do
+  if docker exec metalwatch-db mysqladmin ping -h 127.0.0.1 --silent >/dev/null 2>&1; then
+    break
+  fi
+  sleep 2
+done
+
+# 数据库迁移由应用镜像内置的迁移命令完成（幂等）
+if docker exec metalwatch-api /app/metalwatch migrate --config /data/metalwatch.yaml >/dev/null 2>&1; then
+  echo "数据库迁移完成：${TRIM_OLD_APPVER:-未知} -> ${TRIM_APPVER:-未知}" > "$LOG"
+  exit 0
+fi
+
+echo "数据库迁移失败，请在应用日志中排查后重试；应用数据目录未被修改。" > "$LOG"
+exit 1

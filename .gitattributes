@@ -1,0 +1,16 @@
+# 全仓库统一 LF：本机是 Windows，但产物要在 Linux（飞牛 OS）上打包运行
+* text=auto eol=lf
+
+# 飞牛生命周期脚本必须是 LF —— 带 CRLF 会导致真机上执行失败
+# 注意：cmd 目录在仓库里是多层深（deploy/fpk/<app>/cmd/），必须用 **/ 前缀
+**/cmd/* text eol=lf
+**/cmd/** text eol=lf
+*.sh text eol=lf
+
+# 二进制
+*.png binary
+*.PNG binary
+*.fpk binary
+*.mmdb binary
+*.xlsx binary
+*.pdf binary

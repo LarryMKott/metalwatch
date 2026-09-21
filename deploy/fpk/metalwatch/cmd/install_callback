@@ -1,0 +1,73 @@
+#!/bin/bash
+# 安装后初始化：创建运行时目录、校验向导输入、渲染应用配置
+set -u
+
+LOG="$TRIM_TEMP_LOGFILE"
+
+fail() {
+  echo "$1" > "$LOG"
+  exit 1
+}
+
+# ---------- 1. 向导输入校验（向导值视为不可信输入） ----------
+port="${TRIM_SERVICE_PORT:-18080}"
+case "$port" in ''|*[!0-9]*) fail "服务端口无效：$port" ;; esac
+[ "$port" -ge 1 ] && [ "$port" -le 65535 ] || fail "服务端口超出范围：$port"
+
+concurrency="${wizard_ipmi_concurrency:-16}"
+case "$concurrency" in ''|*[!0-9]*) fail "IPMI 并发数必须为数字" ;; esac
+[ "$concurrency" -ge 1 ] && [ "$concurrency" -le 256 ] || fail "IPMI 并发数应在 1-256 之间"
+
+sensor_interval="${wizard_sensor_interval:-30}"
+case "$sensor_interval" in ''|*[!0-9]*) fail "传感器采集周期必须为数字（秒）" ;; esac
+[ "$sensor_interval" -ge 10 ] && [ "$sensor_interval" -le 600 ] || fail "传感器采集周期应在 10-600 秒之间"
+
+retention="${wizard_metric_retention_days:-180}"
+case "$retention" in ''|*[!0-9]*) fail "指标保留天数必须为数字" ;; esac
+
+case "${wizard_db_password:-}" in
+  '') fail "数据库密码不能为空" ;;
+esac
+[ "${#wizard_db_password}" -ge 12 ] || fail "数据库密码长度至少 12 位"
+
+# 密码含 YAML/shell 特殊字符时风险最高，这里只做最小必要限制
+case "$wizard_db_password" in
+  *[\"\'\`\$\\]*|*" "*) fail "数据库密码请勿包含引号、反引号、美元符、反斜杠或空格" ;;
+esac
+
+# ---------- 2. 运行时目录（TRIM_PKGVAR 即飞牛持久卷，重装 FPK 不丢） ----------
+mkdir -p \
+  "$TRIM_PKGVAR/data/secret" \
+  "$TRIM_PKGVAR/data/reports" \
+  "$TRIM_PKGVAR/data/geoip" \
+  "$TRIM_PKGVAR/logs" \
+  "$TRIM_PKGVAR/mysql" \
+  "$TRIM_PKGVAR/prometheus" || fail "运行时目录创建失败"
+
+chmod 0700 "$TRIM_PKGVAR/data/secret" || fail "密钥目录权限设置失败"
+
+# ---------- 3. 渲染应用配置（不落任何明文密钥） ----------
+cat > "$TRIM_PKGVAR/data/metalwatch.yaml" <<YAML
+server:
+  port: ${port}
+  timezone: "${wizard_timezone:-Asia/Shanghai}"
+collect:
+  ipmi_concurrency: ${concurrency}
+  sensor_interval: ${sensor_interval}
+  asset_interval: 86400
+  smart_interval: 900
+retention:
+  metrics_days: ${retention}
+alert:
+  webhook: "${wizard_alert_webhook:-}"
+storage:
+  data_dir: "${TRIM_PKGVAR}/data"
+  share_dir: "${TRIM_DATA_SHARE_PATHS%%:*}"
+log:
+  level: "${wizard_log_level:-info}"
+YAML
+
+chmod 0640 "$TRIM_PKGVAR/data/metalwatch.yaml" || fail "应用配置文件权限设置失败"
+
+echo "MetalWatch 初始化完成，版本 ${TRIM_APPVER}"
+exit 0

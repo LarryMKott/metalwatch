@@ -1,0 +1,23 @@
+{
+  "docker-project": {
+    "projects": [
+      {
+        "name": "metalwatch",
+        "path": "docker"
+      }
+    ]
+  },
+  "data-share": {
+    "shares": [
+      {
+        "name": "metalwatch/reports"
+      },
+      {
+        "name": "metalwatch/backups"
+      },
+      {
+        "name": "metalwatch/geoip"
+      }
+    ]
+  }
+}

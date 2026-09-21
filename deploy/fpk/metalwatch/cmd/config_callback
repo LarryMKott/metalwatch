@@ -1,0 +1,57 @@
+#!/bin/bash
+# 配置变更后：重渲染配置并重启应用容器（幂等，可重复执行）
+set -u
+
+LOG="$TRIM_TEMP_LOGFILE"
+CONF="$TRIM_PKGVAR/data/metalwatch.yaml"
+
+fail() {
+  echo "$1" > "$LOG"
+  exit 1
+}
+
+[ -f "$CONF" ] || fail "应用配置不存在，请先完成安装初始化"
+
+concurrency="${wizard_ipmi_concurrency:-16}"
+case "$concurrency" in ''|*[!0-9]*) fail "IPMI 并发数必须为数字" ;; esac
+
+sensor_interval="${wizard_sensor_interval:-30}"
+case "$sensor_interval" in ''|*[!0-9]*) fail "传感器采集周期必须为数字（秒）" ;; esac
+[ "$sensor_interval" -ge 10 ] && [ "$sensor_interval" -le 600 ] || fail "传感器采集周期应在 10-600 秒之间"
+
+retention="${wizard_metric_retention_days:-180}"
+case "$retention" in ''|*[!0-9]*) fail "指标保留天数必须为数字" ;; esac
+
+port="${TRIM_SERVICE_PORT:-18080}"
+
+cat > "$CONF" <<YAML
+server:
+  port: ${port}
+  timezone: "${wizard_timezone:-Asia/Shanghai}"
+collect:
+  ipmi_concurrency: ${concurrency}
+  sensor_interval: ${sensor_interval}
+  asset_interval: 86400
+  smart_interval: 900
+retention:
+  metrics_days: ${retention}
+alert:
+  webhook: "${wizard_alert_webhook:-}"
+storage:
+  data_dir: "${TRIM_PKGVAR}/data"
+  share_dir: "${TRIM_DATA_SHARE_PATHS%%:*}"
+log:
+  level: "${wizard_log_level:-info}"
+YAML
+chmod 0640 "$CONF"
+
+# 仅当应用正在运行时重启，避免把停机状态改成运行状态
+if docker inspect -f '{{.State.Running}}' metalwatch-api 2>/dev/null | grep -q 'true'; then
+  docker restart metalwatch-api >/dev/null 2>&1 || fail "重启 metalwatch-api 失败"
+  # 保留策略变更后重载 Prometheus 配置
+  docker exec metalwatch-api true >/dev/null 2>&1
+  docker kill -s HUP metalwatch-tsdb >/dev/null 2>&1 || true
+fi
+
+echo "MetalWatch 配置已更新"
+exit 0

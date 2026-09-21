@@ -1,0 +1,162 @@
+[
+  {
+    "stepTitle": "管理员账号",
+    "items": [
+      {
+        "type": "tips",
+        "helpText": "MetalWatch 将通过单一端口提供 WebUI 与 Agent 上报接口，端口由应用清单声明（默认 18080），Agent 上报路径为 /api/v1/agent/*。"
+      },
+      {
+        "type": "text",
+        "field": "wizard_admin_user",
+        "label": "管理员用户名",
+        "initValue": "admin",
+        "rules": [
+          {
+            "required": true,
+            "message": "请输入管理员用户名"
+          },
+          {
+            "pattern": "^[A-Za-z0-9_.-]{3,32}$",
+            "message": "3-32 位字母、数字、下划线、点或连字符"
+          }
+        ]
+      },
+      {
+        "type": "password",
+        "field": "wizard_admin_password",
+        "label": "管理员密码",
+        "rules": [
+          {
+            "required": true,
+            "message": "请输入管理员密码"
+          },
+          {
+            "min": 8,
+            "message": "密码长度至少 8 位"
+          }
+        ]
+      }
+    ]
+  },
+  {
+    "stepTitle": "内置数据库",
+    "items": [
+      {
+        "type": "tips",
+        "helpText": "该密码同时作为内置 MySQL 的 root 与业务账号密码，仅在应用内部使用，不会上传。请勿包含引号、反引号、美元符、反斜杠或空格。"
+      },
+      {
+        "type": "password",
+        "field": "wizard_db_password",
+        "label": "数据库密码",
+        "rules": [
+          {
+            "required": true,
+            "message": "请输入数据库密码"
+          },
+          {
+            "min": 12,
+            "message": "长度至少 12 位"
+          }
+        ]
+      },
+      {
+        "type": "select",
+        "field": "wizard_timezone",
+        "label": "时区",
+        "initValue": "Asia/Shanghai",
+        "options": [
+          { "label": "Asia/Shanghai (UTC+8)", "value": "Asia/Shanghai" },
+          { "label": "Asia/Hong_Kong (UTC+8)", "value": "Asia/Hong_Kong" },
+          { "label": "UTC", "value": "UTC" },
+          { "label": "Asia/Tokyo (UTC+9)", "value": "Asia/Tokyo" },
+          { "label": "America/Los_Angeles (UTC-8)", "value": "America/Los_Angeles" },
+          { "label": "Europe/London (UTC+0)", "value": "Europe/London" }
+        ]
+      }
+    ]
+  },
+  {
+    "stepTitle": "采集与保留策略",
+    "items": [
+      {
+        "type": "text",
+        "field": "wizard_ipmi_concurrency",
+        "label": "IPMI 并发数",
+        "initValue": "16",
+        "rules": [
+          {
+            "required": true,
+            "message": "请输入并发数"
+          },
+          {
+            "pattern": "^[0-9]{1,3}$",
+            "message": "仅允许数字"
+          },
+          {
+            "min": 1,
+            "max": 256,
+            "message": "建议范围 1-256"
+          }
+        ]
+      },
+      {
+        "type": "select",
+        "field": "wizard_sensor_interval",
+        "label": "传感器采集周期",
+        "initValue": "30",
+        "options": [
+          { "label": "10 秒（高频）", "value": "10" },
+          { "label": "30 秒（推荐）", "value": "30" },
+          { "label": "60 秒（低频）", "value": "60" },
+          { "label": "300 秒（省资源）", "value": "300" }
+        ]
+      },
+      {
+        "type": "select",
+        "field": "wizard_metric_retention_days",
+        "label": "指标保留时长",
+        "initValue": "180",
+        "options": [
+          { "label": "30 天", "value": "30" },
+          { "label": "90 天", "value": "90" },
+          { "label": "180 天（推荐）", "value": "180" },
+          { "label": "365 天", "value": "365" }
+        ]
+      },
+      {
+        "type": "select",
+        "field": "wizard_log_level",
+        "label": "日志级别",
+        "initValue": "info",
+        "options": [
+          { "label": "info", "value": "info" },
+          { "label": "debug", "value": "debug" },
+          { "label": "warn", "value": "warn" }
+        ]
+      }
+    ]
+  },
+  {
+    "stepTitle": "告警通知",
+    "items": [
+      {
+        "type": "tips",
+        "helpText": "可留空，安装后在应用设置中继续添加邮件与 Webhook 通道。"
+      },
+      {
+        "type": "text",
+        "field": "wizard_alert_webhook",
+        "label": "默认告警 Webhook 地址",
+        "initValue": "",
+        "rules": [
+          {
+            "pattern": "^$|^https?://.+",
+            "message": "请填写 http(s):// 开头的地址或留空"
+          }
+        ]
+      }
+    ]
+  }
+]

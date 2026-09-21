@@ -1,0 +1,41 @@
+#!/bin/bash
+# 卸载前：按用户在 wizard/uninstall 中的选择处理数据
+set -u
+
+LOG="$TRIM_TEMP_LOGFILE"
+KEEP="${wizard_uninstall_keep_data:-true}"
+
+backup_to_share() {
+  # 第一段共享目录路径作为备份落点
+  share="${TRIM_DATA_SHARE_PATHS%%:*}"
+  [ -n "$share" ] && [ -d "$share" ] || return 0
+
+  dest="$share/metalwatch-backup-$(date +%Y%m%d%H%M%S)"
+  mkdir -p "$dest" || return 1
+
+  # 导出数据库（容器仍在时执行）
+  if docker inspect -f '{{.State.Running}}' metalwatch-db 2>/dev/null | grep -q 'true'; then
+    docker exec metalwatch-db \
+      mysqldump -u root -p"${wizard_db_password}" --single-transaction --routines metalwatch \
+      > "$dest/metalwatch.sql" 2>/dev/null || rm -f "$dest/metalwatch.sql"
+  fi
+
+  cp -a "$TRIM_PKGVAR/data" "$dest/data" 2>/dev/null || true
+  cp -a "$TRIM_PKGVAR/mysql" "$dest/mysql" 2>/dev/null || true
+  echo "已备份卸载前数据到：$dest" > "$LOG"
+}
+
+case "$KEEP" in
+  true|TRUE|1|yes)
+    backup_to_share
+    echo "已保留应用数据（${TRIM_PKGVAR}）。重新安装 MetalWatch 后将自动复用。" > "$LOG"
+    ;;
+  *)
+    backup_to_share
+    # 只清理本应用自己的运行时目录，绝不动共享目录与其它应用数据
+    rm -rf "$TRIM_PKGVAR/data" "$TRIM_PKGVAR/mysql" "$TRIM_PKGVAR/prometheus" "$TRIM_PKGVAR/logs"
+    echo "已删除 MetalWatch 运行时数据。" > "$LOG"
+    ;;
+esac
+
+exit 0

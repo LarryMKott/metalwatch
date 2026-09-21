@@ -1,0 +1,39 @@
+# 编辑器 / IDE
+.idea/
+.vscode/
+*.iml
+*.swp
+
+# 构建产物
+*.fpk
+build/
+dist/
+deploy/build/
+deploy/fpk/*/target/
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+.pytest_cache/
+.ruff_cache/
+
+# 运行时数据（应用真实数据由 FPK 落到飞牛 TRIM_PKGVAR，不入库）
+data/
+logs/
+*.log
+
+# 本地/敏感配置
+.env
+.env.*
+!.env.example
+deploy/fpk/metalwatch/app/docker/.env
+secrets/
+*.pem
+*.key
+
+# 系统
+.DS_Store
+Thumbs.db
+desktop.ini
