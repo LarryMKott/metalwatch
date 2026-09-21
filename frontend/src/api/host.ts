@@ -1,17 +1,11 @@
 import http from '@/utils/request'
-import type { Host, CreateHostInput, PageResult } from '@/types/api'
+import type { ChangeRecord, CreateHostInput, Host, HostMetricsQuery, HostQuery, MetricSeries, Paginated } from '@/types/api'
 
-// 资产相关接口（docs/04 §3）
+// 资产 / 主机相关接口（docs/04 §3）
+// 分页采用后端约定的 limit/offset 游标。
 
-export interface HostQuery {
-  q?: string
-  status?: string
-  page?: number
-  page_size?: number
-}
-
-export async function listHosts(params: HostQuery = {}): Promise<PageResult<Host>> {
-  const { data } = await http.get<PageResult<Host>>('/hosts', { params })
+export async function listHosts(params: HostQuery = {}): Promise<Paginated<Host>> {
+  const { data } = await http.get<Paginated<Host>>('/hosts', { params })
   return data
 }
 
@@ -29,10 +23,14 @@ export async function deleteHost(id: number): Promise<void> {
   await http.delete(`/hosts/${id}`)
 }
 
-export async function exportAssets(format: 'csv' | 'xlsx' | 'json', maskSecret = true): Promise<Blob> {
-  const { data } = await http.get('/assets/export', {
-    params: { format, mask_secret: maskSecret },
-    responseType: 'blob'
-  })
-  return data as Blob
+/** 传感器时序曲线：?metric=cpu_temp_celsius&from=&to=&step=60s */
+export async function getHostMetrics(id: number, query: HostMetricsQuery): Promise<MetricSeries> {
+  const { data } = await http.get<MetricSeries>(`/hosts/${id}/metrics`, { params: query })
+  return data
+}
+
+/** 硬件变更记录 */
+export async function getHostChanges(id: number): Promise<ChangeRecord[]> {
+  const { data } = await http.get<ChangeRecord[]>(`/hosts/${id}/changes`)
+  return data
 }

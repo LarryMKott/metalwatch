@@ -58,3 +58,6 @@ desktop.ini
 
 # npm 在受限环境下会写出的字面量环境变量目录（Windows only，必需忽略）
 %SystemDrive%/
+
+# 编辑器/工具自动生成的忽略文件（同步自 .gitignore，无需入库）
+.zcodeignore

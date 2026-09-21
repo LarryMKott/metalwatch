@@ -1,174 +1,161 @@
 syntax = "proto3";
 
-// MetalWatch Agent ↔ 服务端通信契约（HTTP/2 + TLS + Protobuf 二进制）
+package metalwatch.agent;
+
+import "mesh.proto";
+import "bmc.proto";
+
+option go_package = "gitee.com/zhangyilin_233/metalwatch/proto/gen;mwpb";
+
+// MetalWatch Agent ↔ 服务端通信契约（gRPC 双向流 + Protobuf + TLS）
 //
-// 传输约定（与 docs/04 §2 一致）：
-//   POST /api/v1/agent/enroll     —— 一次性注册码换令牌
-//   POST /api/v1/agent/report     —— 指标 + 硬件快照上报（Bearer 令牌）
-//   POST /api/v1/agent/heartbeat  —— 轻量心跳
-//   Content-Type: application/x-protobuf；>32KB 必须 gzip
+// 传输约定（详见 docs/04 §2）：
+//   Stream: 长连接双向流 —— 上行指标/资产/心跳/链路探测，下行控制指令/配置热更新/路由表
+//   Enroll: 一次性 unary —— 注册码换取长期令牌
 //
 // 演进规则：字段只增不删、编号永不复用；删除字段用 reserved 标记。
 
-package metalwatch.agent.v1;
-
-option go_package = "gitee.com/zhangyilin_233/metalwatch/proto/gen/agentv1;agentv1";
-
-// ---------- 通用 ----------
-
-message MetricSample {
-  string name = 1;                     // 指标名，必须在服务端白名单内
-  map<string, string> labels = 2;      // 禁止放序列号等高基数值（docs/03 §3）
+// SensorMetric 是一条硬件传感器采样。
+// 标签只保留低基数字段（device），SN、时间戳等高基数信息不得作为时序标签，
+// 否则会打爆时序索引（见 docs/03 数据设计 §3）。
+message SensorMetric {
+  string name = 1;    // cpu_temp_celsius / fan_rpm / voltage_volts / power_watts ...
+  string device = 2;  // cpu0 / fan1 / psu0 / disk_sda
   double value = 3;
-  int64  unix_milli = 4;               // 0 表示由服务端补当前时间
+  string unit = 4;    // celsius / rpm / volts / watts
+  int32 status = 5;   // 0=ok 1=warning 2=critical 3=unknown
 }
 
-message DiskInfo {
-  string device = 1;                   // /dev/sda 或 \\.\PhysicalDrive0
+// DiskSmart 是磁盘 SMART 健康信息。
+message DiskSmart {
+  string device = 1;      // sda / nvme0n1
   string model = 2;
-  string serial = 3;
-  string media_type = 4;               // HDD / SSD / NVMe
-  uint64 capacity_bytes = 5;
-  int32  temp_celsius = 6;
-  string smart_status = 7;             // OK / PreFail / Fail
-  uint64 reallocated_sectors = 8;
-  uint64 power_on_hours = 9;
-  double wear_percent = 10;
+  string sn = 3;          // 仅用于资产识别，不作为时序标签
+  double temp_celsius = 4;
+  int32 reallocated_sector = 5;
+  double wear_level = 6;  // SSD 磨损百分比
+  bool health = 7;
+  int32 power_on_hours = 8;
 }
 
-message RaidArray {
+message CpuInfo {
+  string model = 1;
+  int32 cores = 2;
+  int32 threads = 3;
+  string socket = 4;
+  double base_mhz = 5;
+}
+
+message MemInfo {
+  string slot = 1;
+  string manufacturer = 2;
+  string part_number = 3;
+  uint64 size_bytes = 4;
+  string speed = 5;
+  string type = 6;
+}
+
+message NicInfo {
+  string name = 1;
+  string mac = 2;
+  string driver = 3;
+  int32 speed_mbps = 4;
+  string link_state = 5;
+}
+
+message RaidInfo {
   string controller = 1;
-  string array = 2;                    // vd0 / md0
-  string level = 3;                    // RAID0/1/5/6/10
-  string state = 4;                    // Optimal/Degraded/Failed/Rebuilding
-  double rebuild_percent = 5;
-  int32  disks = 6;
-  int32  failed_disks = 7;
+  string level = 2;
+  int32 state = 3;         // 0=optimal 1=degraded 2=failed
+  int32 rebuild_percent = 4;
+  int32 disk_count = 5;
 }
 
-message Component {
-  string category = 1;                 // cpu/memory/disk/nic/raid_controller/psu/fan/...
-  string slot = 2;
-  string name = 3;
-  string vendor = 4;
-  string serial = 5;
-  string firmware = 6;
-  uint64 capacity_bytes = 7;
+// AssetSnapshot 是硬件资产快照，用于变更检测（docs/02 M4）。
+message AssetSnapshot {
+  string fingerprint = 1;    // 快照指纹：内容哈希，指纹变化才触发 diff
+  string sn = 2;
+  string board_model = 3;
+  string bios_version = 4;
+  CpuInfo cpu = 5;
+  repeated MemInfo memory = 6;
+  repeated NicInfo nic = 7;
+  RaidInfo raid = 8;
+  string collected_at = 9;   // RFC3339 UTC
 }
 
-message Inventory {
-  string fingerprint = 1;              // 规范化清单的 SHA-1；与上次相同则无需上报
-  repeated Component components = 2;
-  string bios_version = 3;
-  string mainboard = 4;
-  string bmc_firmware = 5;
+// AgentLog 是 Agent 侧运行日志（默认只回传 warning 以上）。
+message AgentLog {
+  string level = 1;
+  string message = 2;
+  int64 at = 3;        // Unix 毫秒
+  string source = 4;   // collector / grpc / mesh / bmc
 }
 
-// ---------- 注册 ----------
+// AgentReport 是 Agent 上行消息。一条流承载多种 kind，避免为每类数据各开一条连接。
+message AgentReport {
+  metalwatch.mesh.MeshHeader mesh = 1;
+  int64 timestamp = 2;                  // Unix 毫秒：采集时刻
+  string kind = 3;                      // metrics / asset / heartbeat / event / link_probe
+  repeated SensorMetric sensors = 4;
+  repeated DiskSmart disks = 5;
+  AssetSnapshot asset = 6;
+  repeated AgentLog logs = 7;
+  repeated metalwatch.mesh.LinkProbe link_probes = 8;
+  repeated metalwatch.bmc.BmcResult bmc_results = 9;
+  string batch_id = 10;                 // 幂等键：断网续传重放时服务端据此去重
+}
 
+// AgentConfig 由服务端下发，Agent 热加载生效，无需重启。
+message AgentConfig {
+  int64 version = 1;
+  int32 sensor_interval_sec = 2;
+  int32 asset_interval_sec = 3;
+  bool ipmi_enabled = 4;
+  bool mesh_enabled = 5;
+  uint32 mesh_max_hops = 6;
+  bool relay_enabled = 7;      // 本节点是否允许作为中继
+  uint32 spool_max_hours = 8;  // 断网缓存保留时长，超时丢弃
+  int32 log_level = 9;         // 0=debug 1=info 2=warn 3=error
+}
+
+// ServerCommand 是服务端下行消息：控制指令、配置热更新、路由表下发。
+message ServerCommand {
+  string command_id = 1;
+  metalwatch.bmc.BmcCommand bmc_cmd = 2;
+  AgentConfig config = 3;
+  metalwatch.mesh.RouteTable route_table = 4;
+  bool request_asset = 5;   // 立即触发一次全量资产采集
+  string server_time = 6;   // RFC3339 UTC，供 Agent 校正时间偏差
+}
+
+// EnrollRequest 是首次注册请求（一次性注册码换取长期令牌）。
 message EnrollRequest {
   string enroll_code = 1;
   string hostname = 2;
   string primary_ip = 3;
   string smbios_uuid = 4;
-  string os_type = 5;                  // linux / windows
+  string os_type = 5;
   string os_version = 6;
   string agent_version = 7;
-  repeated string collect = 8;         // sensors / smart / raid / net_err
+  metalwatch.bmc.BmcCapability bmc_capability = 8;
 }
 
+// EnrollResponse 返回长期令牌。令牌明文只出现这一次。
 message EnrollResponse {
-  int64  host_id = 1;
-  string agent_token = 2;              // 明文仅此一次返回，Agent 需落盘 0600
-  uint32 report_interval_sec = 3;
-  uint32 asset_interval_sec = 4;
-  string report_url = 5;
-  string server_time = 6;              // RFC3339 UTC
-}
-
-// ---------- 上报 ----------
-
-message HostSnapshot {
-  repeated DiskInfo  disks = 1;
-  repeated RaidArray raid = 2;
-  Inventory inventory = 3;             // 仅在指纹变化时携带
-}
-
-message ReportRequest {
-  string batch_id = 1;                 // 幂等键，重放不重复入库
-  int64  host_id = 2;
-  string mode = 3;                     // agent / ipmi
-  string collected_at = 4;             // RFC3339 UTC，允许回溯 24h（补传窗口）
-  uint64 sequence = 5;
-  repeated MetricSample metrics = 6;
-  HostSnapshot snapshot = 7;
-}
-
-message ReportResponse {
-  uint32 accepted = 1;
-  uint32 rejected = 2;
-  uint32 config_version = 3;           // 与本地不一致时 Agent 重新拉取配置
-  string next_report_at = 4;
-}
-
-// ---------- 心跳与配置 ----------
-
-message HeartbeatRequest {
-  int64  host_id = 1;
-  string agent_version = 2;
-  uint64 uptime_sec = 3;
-  uint32 config_version = 4;
-}
-
-message HeartbeatResponse {
-  bool   ok = 1;
-  uint32 config_version = 2;
-  uint32 report_interval_sec = 3;
-  string server_time = 4;
-}
-
-message SpoolPolicy {
-  uint64 max_age_sec = 1;              // 断网缓存最长保留
-  uint64 max_bytes = 2;
-}
-
-message UpgradeHint {
-  string url = 1;
-  string version = 2;
-  string sha256 = 3;
-}
-
-message AgentConfig {
-  uint32 config_version = 1;
-  uint32 report_interval_sec = 2;
-  uint32 asset_interval_sec = 3;
-  uint32 smart_interval_sec = 4;
-  repeated string collect = 5;
-  SpoolPolicy spool = 6;
-  UpgradeHint upgrade = 7;
-}
-
-// ---------- 采集异常 ----------
-
-message CollectError {
-  string component = 1;                // sensors / smart / raid
-  string device = 2;
-  string code = 3;                     // tool_failed / permission / timeout
-  string message = 4;
-  string occurred_at = 5;
-}
-
-message ErrorReportRequest {
   int64 host_id = 1;
-  repeated CollectError errors = 2;
+  string agent_id = 2;
+  string agent_token = 3;
+  int32 report_interval_sec = 4;
+  int32 asset_interval_sec = 5;
+  string server_time = 6;
 }
 
-// ---------- 服务定义（HTTP/2 上的 gRPC 可选形态） ----------
-
-service AgentService {
+// AgentStreamService 是 Agent 与服务端之间的双向流通道。
+//
+// Stream 长连接承载上报与指令下发（秒级实时、无轮询延迟）；
+// Enroll 为一次性 unary 调用——注册本身不需要长连接，也不需要保活。
+service AgentStreamService {
+  rpc Stream(stream AgentReport) returns (stream ServerCommand);
   rpc Enroll(EnrollRequest) returns (EnrollResponse);
-  rpc Report(ReportRequest) returns (ReportResponse);
-  rpc Heartbeat(HeartbeatRequest) returns (HeartbeatResponse);
-  rpc GetConfig(HeartbeatRequest) returns (AgentConfig);
-  rpc ReportErrors(ErrorReportRequest) returns (ReportResponse);
 }

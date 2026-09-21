@@ -14,7 +14,7 @@ export async function getStorageBackends(): Promise<StorageBackendsResponse> {
   return data
 }
 
-export async function getHealth(): Promise<unknown> {
-  const { data } = await http.get('/../healthz')
-  return data
+export async function getHealth(): Promise<{ ok: boolean; [k: string]: unknown }> {
+  const { data } = await http.get('/healthz')
+  return data as { ok: boolean; [k: string]: unknown }
 }

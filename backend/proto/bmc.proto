@@ -1,0 +1,36 @@
+syntax = "proto3";
+
+package metalwatch.bmc;
+
+option go_package = "gitee.com/zhangyilin_233/metalwatch/proto/gen;mwpb";
+
+// BmcCommand 是服务端下发到 Agent、由 Agent 在本地执行 IPMI 的硬件控制指令。
+// 指令不直达 BMC：服务端通常无法跨网段访问 BMC，因此由同网段的 Agent 代执行。
+message BmcCommand {
+  string command_id = 1;    // 幂等键，同一指令重复下发只执行一次
+  string cmd_type = 2;      // fan_speed / power / identify
+  string target = 3;        // 目标设备标识：整机用 host，单风扇/单电源用设备名
+  int32 speed_percent = 4;  // fan_speed 时有效：0~100，0 表示交还自动调速
+  bool auto_mode = 5;       // true 表示恢复 BMC 自动控制
+  int32 duration_sec = 6;   // identify（指示灯定位）持续时长
+  string power_action = 7;  // power: on / off / cycle / reset
+}
+
+// BmcResult 回传指令执行结果，服务端据此写审计日志与告警。
+message BmcResult {
+  string command_id = 1;
+  bool ok = 2;
+  string message = 3;       // 失败原因（IPMI 原始错误已脱敏）
+  int64 executed_at = 4;    // Unix 毫秒
+  double observed_value = 5; // 执行后读回的观测值（如实际风扇转速）
+}
+
+// BmcCapability 描述节点 BMC 支持的控制能力，供前端决定是否显示对应操作。
+message BmcCapability {
+  bool fan_control = 1;
+  bool power_control = 2;
+  bool identify = 3;
+  bool sensor_read = 4;
+  string bmc_model = 5;
+  string firmware_version = 6;
+}

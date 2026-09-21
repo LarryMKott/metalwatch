@@ -1,115 +1,145 @@
 <script setup lang="ts">
-import { computed, onMounted } from 'vue'
-import TempChart, { type Series } from '@/components/Chart/TempChart.vue'
+import { computed, onMounted, ref } from 'vue'
+import { Message } from '@arco-design/web-vue'
+import BaseChart from '@/components/Chart/BaseChart.vue'
+import { getOverview } from '@/api/overview'
+import { listHosts } from '@/api/host'
 import { useAppStore } from '@/store'
-import { formatBytes, formatDuration } from '@/utils/format'
+import { formatDuration } from '@/utils/format'
+import type { Host, Overview } from '@/types/api'
 
-// 监控大盘：上半部分为**真实**系统状态（来自 GET /api/v1/system/status），
-// 下半部分曲线的数据源由 W1b（内嵌时序存储）落地后经 /api/v1/hosts/{id}/metrics 提供，
-// 因此这里先渲染示例数据并在界面标注，避免误认为已经接上真实指标。
+// 监控大盘：资产总览、在线状态、故障统计、告警趋势、地域分布。
+// 数据来自 GET /api/v1/overview 与 GET /api/v1/hosts（地域分布由资产列表聚合）。
 const store = useAppStore()
-onMounted(() => void store.refreshSystem())
+const overview = ref<Overview | null>(null)
+const hosts = ref<Host[]>([])
+const loading = ref(false)
 
-const cards = computed(() => [
-  { label: '服务器总数', value: String(store.status?.host_count ?? '-'), tone: 'normal' },
-  { label: '运行时长', value: formatDuration(store.status?.uptime_sec), tone: 'ok' },
-  { label: '堆内存', value: formatBytes(store.status?.heap_bytes), tone: 'muted' },
-  { label: 'Goroutine', value: String(store.status?.goroutines ?? '-'), tone: 'muted' }
+const stats = computed(() => [
+  { label: '资产总数', value: overview.value?.host_total ?? 0, tone: 'arcoblue' },
+  { label: '在线', value: overview.value?.host_online ?? 0, tone: 'green' },
+  { label: '离线', value: overview.value?.host_offline ?? 0, tone: 'red' },
+  { label: '活跃告警', value: overview.value?.alert_active ?? 0, tone: 'orange' },
+  { label: '运行时长', value: formatDuration(store.status?.uptime_sec), tone: 'gray' }
 ])
 
-const drivers = computed(() => ({
-  metadata: String(store.status?.storage?.['metadata_driver'] ?? '-'),
-  tsdb: String(store.status?.storage?.['tsdb_driver'] ?? '未接入')
-}))
+const AXIS = { axisLine: { lineStyle: { color: '#334155' } }, axisLabel: { color: '#94a3b8' } }
+const SPLIT = { splitLine: { lineStyle: { color: '#1e293b' } } }
 
-// 示例曲线（明确标注，不作为真实指标展示）
-const demoSeries: Series[] = (() => {
-  const now = Date.now()
-  const build = (name: string, base: number, jitter: number): Series => ({
-    name,
-    points: Array.from({ length: 60 }, (_, i) => {
-      const v = base + Math.sin(i / 6) * jitter + (Math.random() - 0.5) * jitter
-      return [now - (60 - i) * 60_000, Math.round(v * 10) / 10] as [number, number]
-    })
-  })
-  return [build('Socket0', 47, 3), build('Socket1', 52, 4), build('DIMM_A1', 61, 5)]
-})()
+const trendOption = computed(() => {
+  const s = overview.value?.series ?? []
+  return {
+    backgroundColor: 'transparent',
+    grid: { left: 48, right: 16, top: 36, bottom: 28 },
+    tooltip: { trigger: 'axis' },
+    legend: { top: 0, textStyle: { color: '#94a3b8' }, data: ['在线', '离线', '告警'] },
+    xAxis: { type: 'time', ...AXIS },
+    yAxis: { type: 'value', ...AXIS, ...SPLIT },
+    series: [
+      { name: '在线', type: 'line', smooth: true, showSymbol: false, data: s.map((p) => [p.ts, p.online]), itemStyle: { color: '#22c55e' }, lineStyle: { width: 1.6 } },
+      { name: '离线', type: 'line', smooth: true, showSymbol: false, data: s.map((p) => [p.ts, p.offline]), itemStyle: { color: '#ef4444' }, lineStyle: { width: 1.6 } },
+      { name: '告警', type: 'line', smooth: true, showSymbol: false, data: s.map((p) => [p.ts, p.alert]), itemStyle: { color: '#f59e0b' }, lineStyle: { width: 1.6 } }
+    ]
+  }
+})
+
+const geoOption = computed(() => {
+  const map = new Map<string, number>()
+  for (const h of hosts.value) {
+    const c = h.geo_country || '未知'
+    map.set(c, (map.get(c) ?? 0) + 1)
+  }
+  const data = [...map.entries()].map(([name, value]) => ({ name, value }))
+  return {
+    backgroundColor: 'transparent',
+    tooltip: { trigger: 'item' },
+    legend: { show: false },
+    series: [
+      {
+        name: '地域分布',
+        type: 'pie',
+        radius: ['38%', '68%'],
+        center: ['50%', '52%'],
+        label: { color: '#cbd5e1' },
+        labelLine: { lineStyle: { color: '#475569' } },
+        data: data.length ? data : [{ name: '暂无数据', value: 1, itemStyle: { color: '#1e293b' } }]
+      }
+    ]
+  }
+})
+
+async function load() {
+  loading.value = true
+  try {
+    const [ov, hs] = await Promise.all([getOverview(), listHosts({ limit: 500, offset: 0 })])
+    overview.value = ov
+    hosts.value = hs.items
+  } catch (e) {
+    Message.error((e as Error).message || '加载大盘数据失败')
+  } finally {
+    loading.value = false
+  }
+}
+
+onMounted(load)
 </script>
 
 <template>
-  <div class="grid">
-    <section class="mw-card">
-      <h2>系统状态</h2>
-      <div class="cards">
-        <div v-for="c in cards" :key="c.label" class="stat" :class="c.tone">
-          <div class="value">{{ c.value }}</div>
-          <div class="label">{{ c.label }}</div>
-        </div>
-      </div>
-      <p class="dim">
-        元数据存储：<strong>{{ drivers.metadata }}</strong> ·
-        时序存储：<strong>{{ drivers.tsdb }}</strong>
-        <span v-if="store.lastError" class="mw-tag crit" style="margin-left: 8px">{{ store.lastError }}</span>
-      </p>
-    </section>
+  <a-spin :loading="loading" tip="加载中…" class="page-spin">
+    <a-row :gutter="16" class="cards">
+      <a-col v-for="s in stats" :key="s.label" :xs="12" :sm="8" :md="8" :lg="4">
+        <a-card class="stat" :bordered="false">
+          <a-statistic v-if="typeof s.value === 'number'" :title="s.label" :value="s.value" :value-from="0" animation />
+          <div v-else class="text-stat">
+            <div class="t-val">{{ s.value }}</div>
+            <div class="t-label">{{ s.label }}</div>
+          </div>
+        </a-card>
+      </a-col>
+    </a-row>
 
-    <div>
-      <div class="hint">
-        <span class="mw-tag warn">示例数据</span>
-        曲线数据源待 W1b（内嵌时序存储）落地后接入；届时将改为按主机查询真实采样。
-      </div>
-      <TempChart title="CPU / 内存温度（示例）" :series="demoSeries" unit="°C" :threshold-warn="65" :threshold-crit="80" />
-    </div>
-  </div>
+    <a-row :gutter="16" class="charts">
+      <a-col :xs="24" :lg="14">
+        <a-card title="告警趋势" :bordered="false">
+          <BaseChart :option="trendOption" height="300px" />
+        </a-card>
+      </a-col>
+      <a-col :xs="24" :lg="10">
+        <a-card title="地域分布" :bordered="false">
+          <BaseChart :option="geoOption" height="300px" />
+        </a-card>
+      </a-col>
+    </a-row>
+
+    <a-alert v-if="store.lastError" type="warning" class="warn">
+      后端返回异常：{{ store.lastError }}（可能为后端未启动；界面已按空数据渲染）
+    </a-alert>
+  </a-spin>
 </template>
 
 <style scoped>
-.grid {
-  display: grid;
-  gap: 16px;
-}
-h2 {
-  margin: 0 0 12px;
-  font-size: 15px;
-  font-weight: 600;
+.page-spin {
+  width: 100%;
 }
 .cards {
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
-  gap: 12px;
+  margin-bottom: 16px;
 }
-.stat {
-  background: var(--mw-panel-2);
-  border: 1px solid var(--mw-border);
-  border-left-width: 3px;
-  border-radius: 8px;
-  padding: 10px 12px;
+.stat :deep(.arco-statistic-title) {
+  color: var(--mw-text-dim);
 }
-.stat .value {
+.text-stat .t-val {
   font-size: 22px;
   font-weight: 600;
+  color: var(--mw-text);
 }
-.stat .label {
+.text-stat .t-label {
   color: var(--mw-text-dim);
   font-size: 12px;
 }
-.stat.normal {
-  border-left-color: var(--mw-accent);
+.charts {
+  margin-bottom: 16px;
 }
-.stat.ok {
-  border-left-color: var(--mw-ok);
-}
-.stat.muted {
-  border-left-color: var(--mw-border);
-}
-.dim {
-  color: var(--mw-text-dim);
-  font-size: 12px;
-  margin: 12px 0 0;
-}
-.hint {
-  color: var(--mw-text-dim);
-  font-size: 12px;
-  margin-bottom: 8px;
+.warn {
+  margin-top: 8px;
 }
 </style>

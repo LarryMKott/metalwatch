@@ -1,0 +1,42 @@
+syntax = "proto3";
+
+package metalwatch.mesh;
+
+option go_package = "gitee.com/zhangyilin_233/metalwatch/proto/gen;mwpb";
+
+// MeshHeader 是跨 Agent 转发消息的公共头，所有经中继的消息都必须携带。
+// 防环路依赖 hop_count 与 path：转发前检查自身是否已在 path 中。
+message MeshHeader {
+  string src_agent = 1;    // 源 Agent ID（产生数据的节点）
+  string dst_agent = 2;    // 目的 Agent ID；上报场景为空表示直连目标为服务端
+  uint32 hop_count = 3;    // 已历经跳数，超过 max_hops 即丢弃
+  uint32 priority = 4;     // 1=紧急（温度突变/硬件故障）2=普通（周期指标）
+  repeated string path = 5; // 已途经的 Agent ID 序列，用于环路检测
+}
+
+// LinkProbe 是 Agent 对邻节点的链路探测结果，由服务端汇总成全局拓扑。
+message LinkProbe {
+  string from_agent = 1;
+  string to_agent = 2;
+  double rtt_ms = 3;        // 往返时延
+  double loss_rate = 4;     // 丢包率 0~1
+  int64 measured_at = 5;    // Unix 毫秒
+  bool direct = 6;          // 是否直连服务端（非中继）
+}
+
+// RouteEntry 是一条路由表项：到达 dst_agent 的下一跳。
+message RouteEntry {
+  string dst_agent = 1;
+  string next_hop = 2;   // 下一跳 Agent ID；为空表示直连服务端
+  uint32 hop_count = 3;
+  double cost = 4;       // Dijkstra 权重：RTT + 丢包惩罚 + 跳数系数
+  repeated string path = 5;
+}
+
+// RouteTable 由服务端 Mesh 引擎集中计算后下发。
+message RouteTable {
+  int64 version = 1;          // 单调递增，Agent 据此判断是否需要更新
+  int64 computed_at = 2;
+  repeated RouteEntry entries = 3;
+  uint32 max_hops = 4;        // 超过该跳数直接走直连或丢弃
+}
