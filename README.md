@@ -58,6 +58,21 @@ fnpack build
 - **两套存储分工**：会变的关系数据进 MySQL，画曲线的数值进 Prometheus；服务端内置 exporter 供 Prometheus 抓取，不让 Agent 直写 TSDB。
 - **降级诚实**：「日志进飞牛日志中心」「复用飞牛 RBAC 账号」这两条 PRD 诉求在官方文档中查不到依据，已降级为应用内实现 + 待真机验证。
 
+## Git 工作流
+
+- **分支**：`main` 为稳定分支，日常开发提交到 `dev`；阶段稳定后 `dev` 合入 `main`。
+- **提交信息**：`类型: 摘要` + 要点列表，类型用 `feat` / `fix` / `docs` / `chore` / `refactor`。
+- **换行符**：`.gitattributes` 强制全仓库 LF。`cmd/` 下的生命周期脚本带 CRLF 会在飞牛真机上**执行失败**，Windows 上不要改成 CRLF。自查命令：`git ls-files --eol`（应全部为 `w/lf`）。
+- **不入库**：`.idea/`、`*.fpk` 构建产物、运行时 `data/`、`logs/`、密钥文件（见 `.gitignore`）。
+
+远程仓库首次关联（地址填入后执行）：
+
+```bash
+git remote add origin <你的 Gitee 仓库地址>
+git push -u origin main
+git push -u origin dev
+```
+
 ## 待真机验证清单（未验证前不要对外宣称）
 
 | # | 事项 | 影响 |
