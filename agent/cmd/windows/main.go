@@ -1,9 +1,9 @@
-//go:build linux
+//go:build windows
 
-// MetalWatch Agent —— Linux 平台入口。
+// MetalWatch Agent —— Windows 平台入口。
 //
-// 采集方式：直接读 /sys/class/hwmon 与 /proc，不依赖 lm-sensors；SMART 走随包内置的 smartctl。
-// 以 root 运行（systemd unit），因为读 DMI 与磁盘设备需要权限。
+// 采集方式：PowerShell CIM（WMI）查询，Server Core 亦可；不引入 cgo 依赖。
+// 以 LocalSystem 运行（注册为 Windows 服务），因为读 WMI 硬件类需要权限。
 package main
 
 import (
@@ -26,10 +26,11 @@ func main() {
 	enrollCode := flag.String("code", "", "一次性注册码（首次接入使用）")
 	server := flag.String("server", "https://127.0.0.1:18080", "服务端地址")
 	interval := flag.Duration("interval", 30*time.Second, "指标上报周期")
-	spoolDir := flag.String("spool", "/var/lib/metalwatch-agent/spool", "断网缓存目录")
+	// Windows 默认落在 ProgramData，避免写入系统目录触发权限问题
+	spoolDir := flag.String("spool", "C:\\ProgramData\\MetalWatch\\spool", "断网缓存目录")
 	flag.Parse()
 
-	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
+	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM, os.Interrupt)
 	defer stop()
 
 	client := report.NewClient(report.Options{
@@ -46,7 +47,9 @@ func main() {
 		}
 		fmt.Println("注册成功，令牌已写入本地（请妥善保管）:")
 		fmt.Println(" ", token)
-		fmt.Println("\n请在 systemd unit 中通过 --token 或 EnvironmentFile 提供该令牌。")
+		fmt.Println("\n请在 Windows 服务配置中通过环境变量提供该令牌：")
+		fmt.Println("  METALWATCH_AGENT_TOKEN=<令牌>")
+		fmt.Println("  METALWATCH_HOST_ID=<服务端返回的 host_id>")
 		return
 	}
 

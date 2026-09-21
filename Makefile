@@ -19,7 +19,7 @@ VERSION ?= 0.1.0
 GOOS    ?= linux
 GOARCH  ?= amd64
 BIN     := $(BACKEND)/bin/metalwatch
-AGENT_BIN_DIR := $(BACKEND)/bin/agent
+AGENT_BIN_DIR := $(ROOT)/agent/bin
 
 GOPROXY ?= https://goproxy.cn,direct
 export GOPROXY
@@ -45,12 +45,13 @@ build: web
 		-o $(BIN) ./cmd/server
 	@echo "==> $(BIN)"
 
-## 交叉编译 Agent（Linux / Windows）
+## 交叉编译 Agent（Linux / Windows；agent 是独立 module，入口按平台分目录）
 build-agent:
-	cd $(BACKEND) && for t in linux/amd64 linux/arm64 windows/amd64; do \
+	mkdir -p $(AGENT_BIN_DIR)
+	cd $(ROOT)/agent && for t in linux/amd64 linux/arm64 windows/amd64; do \
 		os=$${t%/*}; arch=$${t#*/}; ext=""; [ "$$os" = "windows" ] && ext=".exe"; \
 		CGO_ENABLED=0 GOOS=$$os GOARCH=$$arch go build -trimpath -ldflags "-s -w" \
-			-o $(AGENT_BIN_DIR)/metalwatch-agent-$$os-$$arch$$ext ./cmd/agent; \
+			-o $(AGENT_BIN_DIR)/metalwatch-agent-$$os-$$arch$$ext ./cmd/$$os; \
 	done
 	@ls -l $(AGENT_BIN_DIR)
 
