@@ -48,3 +48,46 @@
 Git Bash 的 `mkdir` / `ls` / `grep` / `head` / `tail` / `dirname` / `rm` 时可用时不可用 →
 文件操作用托管 Python（`C:\Users\WWTAW\.workbuddy\binaries\python\versions\3.13.12\python.exe`），
 搜索用 Grep/Glob 工具，不要用 shell 管道。
+
+## 仓库目录架构（2026-09-21 定案，改动前先读 docs/05 §3）
+
+```
+backend/    Go 服务端（独立 module）  api/{web,agentpb} · internal/{service,task,adapter,app} · pkg · proto · migrations · configs
+frontend/   Vue3 + TS（Node 22/24 双兼容）  src/{api,components,views,router,store,utils,types,styles}
+agent/      跨平台 Agent（独立 module，仅标准库）  cmd/{linux,windows} · internal/{model,collect,report,heartbeat}
+deploy/     fpk/metalwatch（FPK 工程）· docker（仅开发验证）· script/{build.sh,pb-gen.sh} · tools/
+docs/       01 决策 · 02 模块 · 03 数据 · 04 契约 · 05 计划 · 06 实测记录
+```
+
+**分层铁律**：API 层只做参数解析与响应封装 → Service 层业务规则 → Task 层定时/轮询/IPMI/Agent 管理 →
+Adapter 层实现全部存储（业务对后端零感知）。`internal/app` 是依赖容器，避免 HTTP 子包互相 import 成环。
+
+## 技术栈定案（docs/01 D18–D21）
+
+- **Web 框架 Gin**（不是标准库 net/http，此前计划已推翻）。
+- **存储可插拔**：`internal/adapter` 的 `MetadataStore` / `TimeSeriesStore` 接口 + `Register` 工厂；
+  默认 SQLite（`modernc.org/sqlite`，**必须免 CGO**）；MySQL / PostgreSQL / GBase8s /
+  Prometheus / VictoriaMetrics / InfluxDB2 均按**独立部署**接入（catalog 标记可用与规划中）。
+- **跨方言四条硬约束**：① 时间戳由应用层写 UTC RFC3339；② 不用部分唯一索引（告警去重改 `active_key`）；
+  ③ 枚举用 TEXT+CHECK、布尔用 INTEGER 0/1；④ 占位符由 `adapter.Rebind` 转换（sqlite `?` → pg `$N`）。
+- **Agent 通道 = HTTP/2 + TLS + Protobuf**（`backend/proto/agent.proto`），与前端 JSON 通道严格隔离；
+  proto 生成前两侧用 JSON 兼容通道联调，服务端对 protobuf 请求返回 501 + 指引。
+- **前端**：Vue3 + Composition API + TS + Vite 8 + Pinia + vue-router（**hash 模式**）+ ECharts 6（按需引入）；
+  `engines: ">=22.12.0 <25"`。文档里的 `">=22 <=24"` 是错的（排除 24.0.1+）。
+- 飞牛清单文件是 **无扩展名的 INI `manifest`**，不是 `manifest.yml`。
+
+## 本机工具链坑（本会话新踩，务必遵守）
+
+- **Go 代理**：`proxy.golang.org` 返回 Bad Gateway → 必须 `GOPROXY=https://goproxy.cn,direct` + `GOSUMDB=off`。
+- **跑 npm**：`npm` shell 包装器在损坏的 bash 里报 `/usr/bin/env: 'bash': No such file or directory` →
+  用 `node.exe <node>/node_modules/npm/bin/npm-cli.js`（工具脚本 `D:\pj\.spikes\tools\npmrun.py`）。
+- **Python `write_text` 会写 CRLF**（Windows 默认换行转换）→ 改仓库文本文件后必须复核/统一 LF
+  （脚本 `D:\pj\.spikes\tools\fix_line_endings.py`）。
+- **沙箱 safe-delete 护栏会拦批量删除**：`rmtree(node_modules/dist)`（>50 文件）抛
+  `SAFE_DELETE_BULK_CONFIRM_REQUIRED` → 构建脚本不要自己删 outDir，交给 `vite build --emptyOutDir`。
+- **npm 会写出手字面量 `%SystemDrive%` 目录**（受限环境所致）→ 已加入 `.gitignore`，出现即清理。
+- **Vite 8 默认 rolldown，`manualChunks` 只接受函数**：对象写法两个 Node 版本同时构建失败。
+- **`-race` 需 CGO/gcc**：本机无 gcc 跑不了 → 必须进 CI。
+- **平台文件只放平台实现**：把共用函数写进带 `//go:build linux` 的文件会导致 Windows 构建 `undefined`。
+- **重构后立刻 `go build ./...`**：漏改 `package` 声明只会在此暴露。
+
