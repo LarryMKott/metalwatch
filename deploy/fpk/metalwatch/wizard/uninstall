@@ -4,7 +4,7 @@
     "items": [
       {
         "type": "tips",
-        "helpText": "无论是否保留，卸载前都会尝试将数据备份到飞牛的 metalwatch/backups 共享目录。"
+        "helpText": "无论是否保留，卸载前都会把资产与告警数据库备份到飞牛的 metalwatch/backups 共享目录。"
       },
       {
         "type": "radio",

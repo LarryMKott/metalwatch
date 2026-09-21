@@ -1,12 +1,4 @@
 {
-  "docker-project": {
-    "projects": [
-      {
-        "name": "metalwatch",
-        "path": "docker"
-      }
-    ]
-  },
   "data-share": {
     "shares": [
       {

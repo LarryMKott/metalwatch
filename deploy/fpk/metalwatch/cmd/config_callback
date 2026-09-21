@@ -1,57 +1,78 @@
 #!/bin/bash
-# 配置变更后：重渲染配置并重启应用容器（幂等，可重复执行）
+# 配置变更后：重新渲染配置并重启进程（原生应用需自行重启才能生效）
 set -u
 
-LOG="$TRIM_TEMP_LOGFILE"
-CONF="$TRIM_PKGVAR/data/metalwatch.yaml"
+APP_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+DATA_DIR="${TRIM_PKGVAR}/data"
+CONF_DIR="${TRIM_PKGETC}"
+CONF_FILE="${CONF_DIR}/metalwatch.yaml"
+LOG_DIR="${TRIM_PKGVAR}/logs"
+LOG_FILE="${LOG_DIR}/metalwatch.log"
 
 fail() {
-  echo "$1" > "$LOG"
+  echo "$1" > "$TRIM_TEMP_LOGFILE"
   exit 1
 }
 
-[ -f "$CONF" ] || fail "应用配置不存在，请先完成安装初始化"
+log_msg() {
+  mkdir -p "$LOG_DIR" 2>/dev/null
+  echo "$(date '+%Y-%m-%d %H:%M:%S') - $1" >> "$LOG_FILE"
+}
 
-concurrency="${wizard_ipmi_concurrency:-16}"
-case "$concurrency" in ''|*[!0-9]*) fail "IPMI 并发数必须为数字" ;; esac
+CONCURRENCY="${wizard_ipmi_concurrency:-16}"
+SENSOR_INTERVAL="${wizard_sensor_interval:-30}"
+RETENTION_DAYS="${wizard_metric_retention_days:-180}"
+LOG_LEVEL="${wizard_log_level:-info}"
+WEBHOOK="${wizard_alert_webhook:-}"
+GEOIP_ENABLE="${wizard_geoip_enable:-true}"
+TIMEZONE="${wizard_timezone:-Asia/Shanghai}"
 
-sensor_interval="${wizard_sensor_interval:-30}"
-case "$sensor_interval" in ''|*[!0-9]*) fail "传感器采集周期必须为数字（秒）" ;; esac
-[ "$sensor_interval" -ge 10 ] && [ "$sensor_interval" -le 600 ] || fail "传感器采集周期应在 10-600 秒之间"
+case "$CONCURRENCY" in ''|*[!0-9]*) fail "IPMI 并发数必须为数字" ;; esac
+case "$SENSOR_INTERVAL" in ''|*[!0-9]*) fail "传感器采集周期必须为数字" ;; esac
+case "$RETENTION_DAYS" in ''|*[!0-9]*) fail "指标保留天数必须为数字" ;; esac
 
-retention="${wizard_metric_retention_days:-180}"
-case "$retention" in ''|*[!0-9]*) fail "指标保留天数必须为数字" ;; esac
+mkdir -p "$CONF_DIR" || fail "配置目录不可写：${CONF_DIR}"
 
-port="${TRIM_SERVICE_PORT:-18080}"
-
-cat > "$CONF" <<YAML
-server:
-  port: ${port}
-  timezone: "${wizard_timezone:-Asia/Shanghai}"
-collect:
-  ipmi_concurrency: ${concurrency}
-  sensor_interval: ${sensor_interval}
-  asset_interval: 86400
-  smart_interval: 900
-retention:
-  metrics_days: ${retention}
-alert:
-  webhook: "${wizard_alert_webhook:-}"
-storage:
-  data_dir: "${TRIM_PKGVAR}/data"
-  share_dir: "${TRIM_DATA_SHARE_PATHS%%:*}"
-log:
-  level: "${wizard_log_level:-info}"
-YAML
-chmod 0640 "$CONF"
-
-# 仅当应用正在运行时重启，避免把停机状态改成运行状态
-if docker inspect -f '{{.State.Running}}' metalwatch-api 2>/dev/null | grep -q 'true'; then
-  docker restart metalwatch-api >/dev/null 2>&1 || fail "重启 metalwatch-api 失败"
-  # 保留策略变更后重载 Prometheus 配置
-  docker exec metalwatch-api true >/dev/null 2>&1
-  docker kill -s HUP metalwatch-tsdb >/dev/null 2>&1 || true
+# 保留原文件的 raw_days，避免配置变更把它重置
+RAW_DAYS="7"
+if [ -f "$CONF_FILE" ]; then
+  RAW_DAYS="$(sed -n 's/^[[:space:]]*raw_days:[[:space:]]*\([0-9]\{1,\}\).*/\1/p' "$CONF_FILE" | head -n 1)"
+  [ -n "$RAW_DAYS" ] || RAW_DAYS="7"
 fi
 
-echo "MetalWatch 配置已更新"
+cat > "$CONF_FILE" <<YAML
+server:
+  port: ${TRIM_SERVICE_PORT:-18080}
+  timezone: "${TIMEZONE}"
+  log_level: "${LOG_LEVEL}"
+collect:
+  ipmi_concurrency: ${CONCURRENCY}
+  sensor_interval: ${SENSOR_INTERVAL}
+  asset_interval: 86400
+  smart_interval: 900
+  bmc_serial: true
+  bmc_retry_max: 3
+  bmc_backoff_max_sec: 1800
+retention:
+  raw_days: ${RAW_DAYS}
+  agg_days: ${RETENTION_DAYS}
+geoip:
+  enabled: ${GEOIP_ENABLE}
+  mmdb_dir: "${TRIM_PKGVAR}/data/geoip"
+alert:
+  webhook_url: "${WEBHOOK}"
+YAML
+
+chmod 0640 "$CONF_FILE" 2>/dev/null
+log_msg "配置已更新，准备重启进程"
+
+# 原生应用需自行重启：先停后起
+if [ -x "${APP_ROOT}/cmd/main" ]; then
+  "${APP_ROOT}/cmd/main" stop >/dev/null 2>&1 || true
+  "${APP_ROOT}/cmd/main" start >/dev/null 2>&1 || fail "配置已写入，但进程重启失败，请在应用日志中排查后手动重启。"
+else
+  fail "未找到生命周期脚本 ${APP_ROOT}/cmd/main，无法重启进程。"
+fi
+
+log_msg "配置变更完成"
 exit 0

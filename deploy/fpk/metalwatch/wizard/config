@@ -3,43 +3,53 @@
     "stepTitle": "采集参数",
     "items": [
       {
-        "type": "tips",
-        "helpText": "采集周期调小时 BMC 压力增大，请结合带外网络带宽评估。"
+        "type": "text",
+        "field": "wizard_sensor_interval",
+        "label": "传感器采集周期（秒）",
+        "initValue": "30",
+        "rules": [
+          { "required": true, "message": "请输入采集周期" },
+          { "pattern": "^[0-9]+$", "message": "请填写数字" }
+        ]
       },
       {
         "type": "text",
         "field": "wizard_ipmi_concurrency",
-        "label": "IPMI 并发数",
+        "label": "IPMI 采集并发数",
         "initValue": "16",
         "rules": [
           { "required": true, "message": "请输入并发数" },
-          { "pattern": "^[0-9]{1,3}$", "message": "仅允许数字" },
-          { "min": 1, "max": 256, "message": "建议范围 1-256" }
+          { "pattern": "^[0-9]+$", "message": "请填写数字" }
         ]
-      },
-      {
-        "type": "select",
-        "field": "wizard_sensor_interval",
-        "label": "传感器采集周期",
-        "initValue": "30",
-        "options": [
-          { "label": "10 秒（高频）", "value": "10" },
-          { "label": "30 秒（推荐）", "value": "30" },
-          { "label": "60 秒（低频）", "value": "60" },
-          { "label": "300 秒（省资源）", "value": "300" }
-        ]
-      },
+      }
+    ]
+  },
+  {
+    "stepTitle": "数据保留",
+    "items": [
       {
         "type": "select",
         "field": "wizard_metric_retention_days",
-        "label": "指标保留时长",
+        "label": "聚合指标保留时长",
         "initValue": "180",
         "options": [
-          { "label": "30 天", "value": "30" },
           { "label": "90 天", "value": "90" },
-          { "label": "180 天（推荐）", "value": "180" },
-          { "label": "365 天", "value": "365" }
-        ]
+          { "label": "180 天", "value": "180" },
+          { "label": "365 天", "value": "365" },
+          { "label": "730 天", "value": "730" }
+        ],
+        "helpText": "缩短保留时长会删除超期的聚合数据，立即释放磁盘空间。"
+      }
+    ]
+  },
+  {
+    "stepTitle": "地域与日志",
+    "items": [
+      {
+        "type": "switch",
+        "field": "wizard_geoip_enable",
+        "label": "启用 GeoIP 地域标签",
+        "initValue": "true"
       },
       {
         "type": "select",
@@ -48,29 +58,26 @@
         "initValue": "info",
         "options": [
           { "label": "info", "value": "info" },
-          { "label": "debug", "value": "debug" },
-          { "label": "warn", "value": "warn" }
+          { "label": "debug（排障用）", "value": "debug" },
+          { "label": "warn", "value": "warn" },
+          { "label": "error", "value": "error" }
         ]
       }
     ]
   },
   {
-    "stepTitle": "通知与地域标签",
+    "stepTitle": "告警通道",
     "items": [
       {
         "type": "text",
         "field": "wizard_alert_webhook",
-        "label": "默认告警 Webhook 地址",
+        "label": "告警 Webhook 地址",
         "initValue": "",
-        "rules": [
-          { "pattern": "^$|^https?://.+", "message": "请填写 http(s):// 开头的地址或留空" }
-        ]
+        "helpText": "留空表示不推送。邮件与更多通道可在应用内配置。"
       },
       {
-        "type": "switch",
-        "field": "wizard_geoip_enable",
-        "label": "启用 GeoIP 地域标签",
-        "initValue": true
+        "type": "tips",
+        "helpText": "提交后应用会自动重启以应用新配置，期间监控数据短暂中断（约数秒）。"
       }
     ]
   }

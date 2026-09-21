@@ -4,22 +4,16 @@
     "items": [
       {
         "type": "tips",
-        "helpText": "MetalWatch 将通过单一端口提供 WebUI 与 Agent 上报接口，端口由应用清单声明（默认 18080），Agent 上报路径为 /api/v1/agent/*。"
+        "helpText": "该账号用于登录 MetalWatch WebUI，安装完成后可在应用内继续添加运维与只读用户。"
       },
       {
         "type": "text",
         "field": "wizard_admin_user",
-        "label": "管理员用户名",
+        "label": "管理员账号",
         "initValue": "admin",
         "rules": [
-          {
-            "required": true,
-            "message": "请输入管理员用户名"
-          },
-          {
-            "pattern": "^[A-Za-z0-9_.-]{3,32}$",
-            "message": "3-32 位字母、数字、下划线、点或连字符"
-          }
+          { "required": true, "message": "请输入管理员账号" },
+          { "min": 3, "max": 32, "message": "账号长度需在 3~32 之间" }
         ]
       },
       {
@@ -27,103 +21,95 @@
         "field": "wizard_admin_password",
         "label": "管理员密码",
         "rules": [
-          {
-            "required": true,
-            "message": "请输入管理员密码"
-          },
-          {
-            "min": 8,
-            "message": "密码长度至少 8 位"
-          }
+          { "required": true, "message": "请输入管理员密码" },
+          { "min": 8, "max": 64, "message": "密码至少 8 位" }
         ]
       }
     ]
   },
   {
-    "stepTitle": "内置数据库",
+    "stepTitle": "区域与地域标签",
     "items": [
-      {
-        "type": "tips",
-        "helpText": "该密码同时作为内置 MySQL 的 root 与业务账号密码，仅在应用内部使用，不会上传。请勿包含引号、反引号、美元符、反斜杠或空格。"
-      },
-      {
-        "type": "password",
-        "field": "wizard_db_password",
-        "label": "数据库密码",
-        "rules": [
-          {
-            "required": true,
-            "message": "请输入数据库密码"
-          },
-          {
-            "min": 12,
-            "message": "长度至少 12 位"
-          }
-        ]
-      },
       {
         "type": "select",
         "field": "wizard_timezone",
         "label": "时区",
         "initValue": "Asia/Shanghai",
         "options": [
-          { "label": "Asia/Shanghai (UTC+8)", "value": "Asia/Shanghai" },
-          { "label": "Asia/Hong_Kong (UTC+8)", "value": "Asia/Hong_Kong" },
-          { "label": "UTC", "value": "UTC" },
-          { "label": "Asia/Tokyo (UTC+9)", "value": "Asia/Tokyo" },
-          { "label": "America/Los_Angeles (UTC-8)", "value": "America/Los_Angeles" },
-          { "label": "Europe/London (UTC+0)", "value": "Europe/London" }
+          { "label": "(UTC+08:00) 北京 / 上海", "value": "Asia/Shanghai" },
+          { "label": "(UTC+08:00) 中国香港", "value": "Asia/Hong_Kong" },
+          { "label": "(UTC+08:00) 中国台北", "value": "Asia/Taipei" },
+          { "label": "(UTC+09:00) 东京", "value": "Asia/Tokyo" },
+          { "label": "(UTC+00:00) UTC", "value": "UTC" }
         ]
+      },
+      {
+        "type": "switch",
+        "field": "wizard_geoip_enable",
+        "label": "启用 GeoIP 地域标签",
+        "initValue": "true",
+        "helpText": "内置 GeoIP 库解析节点公网 IP 的归属地与 ASN，仅用于给资产打标签，不采集访问者信息。"
       }
     ]
   },
   {
-    "stepTitle": "采集与保留策略",
+    "stepTitle": "采集参数",
     "items": [
       {
         "type": "text",
-        "field": "wizard_ipmi_concurrency",
-        "label": "IPMI 并发数",
-        "initValue": "16",
+        "field": "wizard_sensor_interval",
+        "label": "传感器采集周期（秒）",
+        "initValue": "30",
         "rules": [
-          {
-            "required": true,
-            "message": "请输入并发数"
-          },
-          {
-            "pattern": "^[0-9]{1,3}$",
-            "message": "仅允许数字"
-          },
-          {
-            "min": 1,
-            "max": 256,
-            "message": "建议范围 1-256"
-          }
-        ]
+          { "required": true, "message": "请输入采集周期" },
+          { "pattern": "^[0-9]+$", "message": "请填写数字" }
+        ],
+        "helpText": "温度、风扇、电压、功耗的采集间隔，范围 10~600 秒。周期越短对 BMC 压力越大。"
       },
       {
-        "type": "select",
-        "field": "wizard_sensor_interval",
-        "label": "传感器采集周期",
-        "initValue": "30",
-        "options": [
-          { "label": "10 秒（高频）", "value": "10" },
-          { "label": "30 秒（推荐）", "value": "30" },
-          { "label": "60 秒（低频）", "value": "60" },
-          { "label": "300 秒（省资源）", "value": "300" }
-        ]
+        "type": "text",
+        "field": "wizard_ipmi_concurrency",
+        "label": "IPMI 采集并发数",
+        "initValue": "16",
+        "rules": [
+          { "required": true, "message": "请输入并发数" },
+          { "pattern": "^[0-9]+$", "message": "请填写数字" }
+        ],
+        "helpText": "同一台 BMC 始终串行访问；并发数只影响跨主机的并行度。范围 1~256。"
       },
+      {
+        "type": "tips",
+        "helpText": "静态资产（CPU/内存/磁盘/BIOS）每天采集一次，SMART 与 RAID 状态每 15 分钟一次，这两项按需在应用内调整。"
+      }
+    ]
+  },
+  {
+    "stepTitle": "数据保留",
+    "items": [
       {
         "type": "select",
         "field": "wizard_metric_retention_days",
-        "label": "指标保留时长",
+        "label": "聚合指标保留时长",
         "initValue": "180",
         "options": [
-          { "label": "30 天", "value": "30" },
           { "label": "90 天", "value": "90" },
           { "label": "180 天（推荐）", "value": "180" },
-          { "label": "365 天", "value": "365" }
-        ]
+          { "label": "365 天", "value": "365" },
+          { "label": "730 天", "value": "730" }
+        ],
+        "helpText": "原始 30 秒采样固定保留 7 天，5 分钟聚合数据按此设置保留。300 台服务器 180 天约占用 4GB。"
+      }
+    ]
+  },
+  {
+    "stepTitle": "告警与日志",
+    "items": [
+      {
+        "type": "text",
+        "field": "wizard_alert_webhook",
+        "label": "告警 Webhook 地址（可选）",
+        "initValue": "",
+        "helpText": "留空表示暂不推送，可稍后在应用内配置。支持企业微信/钉钉机器人或自建接收端。"
       },
       {
         "type": "select",
@@ -131,31 +117,15 @@
         "label": "日志级别",
         "initValue": "info",
         "options": [
-          { "label": "info", "value": "info" },
-          { "label": "debug", "value": "debug" },
-          { "label": "warn", "value": "warn" }
+          { "label": "info（推荐）", "value": "info" },
+          { "label": "debug（排障用）", "value": "debug" },
+          { "label": "warn", "value": "warn" },
+          { "label": "error", "value": "error" }
         ]
-      }
-    ]
-  },
-  {
-    "stepTitle": "告警通知",
-    "items": [
-      {
-        "type": "tips",
-        "helpText": "可留空，安装后在应用设置中继续添加邮件与 Webhook 通道。"
       },
       {
-        "type": "text",
-        "field": "wizard_alert_webhook",
-        "label": "默认告警 Webhook 地址",
-        "initValue": "",
-        "rules": [
-          {
-            "pattern": "^$|^https?://.+",
-            "message": "请填写 http(s):// 开头的地址或留空"
-          }
-        ]
+        "type": "tips",
+        "helpText": "安装后本应用监听端口由应用包声明（当前为 18080），可在飞牛「应用中心 → MetalWatch → 打开」直接访问。"
       }
     ]
   }

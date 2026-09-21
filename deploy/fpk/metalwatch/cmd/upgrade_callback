@@ -1,24 +1,53 @@
 #!/bin/bash
-# 升级后：执行数据库结构迁移，输出版本变更
+# 升级后：用新二进制执行数据库/存储结构迁移，再拉起进程
+# 迁移器本身幂等（schema_version 表控制），可安全重复执行。
 set -u
 
-LOG="$TRIM_TEMP_LOGFILE"
+APP_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+APP_BIN="${TRIM_APPDEST}/server/metalwatch"
+CONF_FILE="${TRIM_PKGETC}/metalwatch.yaml"
+DATA_DIR="${TRIM_PKGVAR}/data"
+LOG_DIR="${TRIM_PKGVAR}/logs"
+LOG_FILE="${LOG_DIR}/metalwatch.log"
 
-echo "MetalWatch 升级：${TRIM_OLD_APPVER:-未知} -> ${TRIM_APPVER:-未知}" > "$LOG"
+log_msg() {
+  mkdir -p "$LOG_DIR" 2>/dev/null
+  echo "$(date '+%Y-%m-%d %H:%M:%S') - $1" >> "$LOG_FILE"
+}
 
-# 等待数据库就绪（最多 120 秒）
-for _ in $(seq 1 60); do
-  if docker exec metalwatch-db mysqladmin ping -h 127.0.0.1 --silent >/dev/null 2>&1; then
-    break
-  fi
-  sleep 2
-done
+fail() {
+  echo "$1" > "$TRIM_TEMP_LOGFILE"
+  log_msg "UPGRADE ERROR: $1"
+  exit 1
+}
 
-# 数据库迁移由应用镜像内置的迁移命令完成（幂等）
-if docker exec metalwatch-api /app/metalwatch migrate --config /data/metalwatch.yaml >/dev/null 2>&1; then
-  echo "数据库迁移完成：${TRIM_OLD_APPVER:-未知} -> ${TRIM_APPVER:-未知}" > "$LOG"
-  exit 0
+log_msg "升级：${TRIM_OLD_APPVER:-未知} -> ${TRIM_APPVER:-未知}"
+
+[ -x "$APP_BIN" ] || fail "升级失败：未找到可执行文件 ${APP_BIN}。"
+[ -f "$CONF_FILE" ] || fail "升级失败：缺少配置文件 ${CONF_FILE}，请先在应用设置中完成配置。"
+
+# 迁移期间必须停止服务，避免旧进程持有数据库连接
+if [ -x "${APP_ROOT}/cmd/main" ]; then
+  "${APP_ROOT}/cmd/main" stop >> "$LOG_FILE" 2>&1 || true
 fi
 
-echo "数据库迁移失败，请在应用日志中排查后重试；应用数据目录未被修改。" > "$LOG"
-exit 1
+# 升级前快照：元数据库是关键资产，体积小，直接复制一份带版本号的副本
+BACKUP="${DATA_DIR}/metalwatch.db.bak.${TRIM_OLD_APPVER:-unknown}"
+if [ -f "${DATA_DIR}/metalwatch.db" ]; then
+  cp -f "${DATA_DIR}/metalwatch.db" "$BACKUP" 2>> "$LOG_FILE" \
+    || log_msg "WARN: 升级前快照失败（不影响继续，但回滚时无本地副本）"
+fi
+
+if "$APP_BIN" migrate --config "$CONF_FILE" --data "$DATA_DIR" >> "$LOG_FILE" 2>&1; then
+  log_msg "结构迁移完成"
+else
+  fail "数据库结构迁移失败，已在 ${LOG_FILE} 记录详情；可回滚到上一版本应用。"
+fi
+
+if [ -x "${APP_ROOT}/cmd/main" ]; then
+  "${APP_ROOT}/cmd/main" start >> "$LOG_FILE" 2>&1 \
+    || fail "迁移成功但进程启动失败，请在 ${LOG_FILE} 中排查。"
+fi
+
+log_msg "升级完成"
+exit 0

@@ -1,73 +1,82 @@
 #!/bin/bash
-# 安装后初始化：创建运行时目录、校验向导输入、渲染应用配置
+# 安装后初始化：校验向导参数 → 建目录 → 渲染配置 → 写入一次性管理员引导文件
+# 原生应用：不涉及容器，只准备进程运行所需的数据目录与配置。
 set -u
 
-LOG="$TRIM_TEMP_LOGFILE"
+DATA_DIR="${TRIM_PKGVAR}/data"
+CONF_DIR="${TRIM_PKGETC}"
+CONF_FILE="${CONF_DIR}/metalwatch.yaml"
+LOG_DIR="${TRIM_PKGVAR}/logs"
+LOG_FILE="${LOG_DIR}/metalwatch.log"
 
 fail() {
-  echo "$1" > "$LOG"
+  echo "$1" > "$TRIM_TEMP_LOGFILE"
   exit 1
 }
 
-# ---------- 1. 向导输入校验（向导值视为不可信输入） ----------
-port="${TRIM_SERVICE_PORT:-18080}"
-case "$port" in ''|*[!0-9]*) fail "服务端口无效：$port" ;; esac
-[ "$port" -ge 1 ] && [ "$port" -le 65535 ] || fail "服务端口超出范围：$port"
+log_msg() {
+  mkdir -p "$LOG_DIR" 2>/dev/null
+  echo "$(date '+%Y-%m-%d %H:%M:%S') - $1" >> "$LOG_FILE"
+}
 
-concurrency="${wizard_ipmi_concurrency:-16}"
-case "$concurrency" in ''|*[!0-9]*) fail "IPMI 并发数必须为数字" ;; esac
-[ "$concurrency" -ge 1 ] && [ "$concurrency" -le 256 ] || fail "IPMI 并发数应在 1-256 之间"
+# 向导值一律按不可信输入处理，使用前逐个校验
+PORT="${TRIM_SERVICE_PORT:-18080}"
+CONCURRENCY="${wizard_ipmi_concurrency:-16}"
+SENSOR_INTERVAL="${wizard_sensor_interval:-30}"
+RETENTION_DAYS="${wizard_metric_retention_days:-180}"
+TIMEZONE="${wizard_timezone:-Asia/Shanghai}"
+LOG_LEVEL="${wizard_log_level:-info}"
+WEBHOOK="${wizard_alert_webhook:-}"
+ADMIN_USER="${wizard_admin_user:-admin}"
+ADMIN_PASSWORD="${wizard_admin_password:-}"
+GEOIP_ENABLE="${wizard_geoip_enable:-true}"
 
-sensor_interval="${wizard_sensor_interval:-30}"
-case "$sensor_interval" in ''|*[!0-9]*) fail "传感器采集周期必须为数字（秒）" ;; esac
-[ "$sensor_interval" -ge 10 ] && [ "$sensor_interval" -le 600 ] || fail "传感器采集周期应在 10-600 秒之间"
+case "$PORT" in ''|*[!0-9]*) fail "服务端口无效：${PORT}" ;; esac
+case "$CONCURRENCY" in ''|*[!0-9]*) fail "IPMI 并发数必须为数字" ;; esac
+[ "$CONCURRENCY" -ge 1 ] && [ "$CONCURRENCY" -le 256 ] || fail "IPMI 并发数需在 1~256 之间"
+case "$SENSOR_INTERVAL" in ''|*[!0-9]*) fail "传感器采集周期必须为数字" ;; esac
+[ "$SENSOR_INTERVAL" -ge 10 ] && [ "$SENSOR_INTERVAL" -le 600 ] || fail "传感器采集周期需在 10~600 秒之间"
+case "$RETENTION_DAYS" in ''|*[!0-9]*) fail "指标保留天数必须为数字" ;; esac
+[ -n "$ADMIN_USER" ] || fail "管理员账号不能为空"
+[ "${#ADMIN_PASSWORD}" -ge 8 ] || fail "管理员密码至少 8 位"
 
-retention="${wizard_metric_retention_days:-180}"
-case "$retention" in ''|*[!0-9]*) fail "指标保留天数必须为数字" ;; esac
+# 运行时目录（数据全部落 TRIM_PKGVAR，重装不丢）
+mkdir -p "$DATA_DIR/secret" "$DATA_DIR/tsdb" "$DATA_DIR/tsdb/wal" "$LOG_DIR" "$CONF_DIR" \
+  || fail "无法创建数据目录，请检查存储空间是否可写。"
+chmod 0700 "$DATA_DIR/secret" 2>/dev/null
 
-case "${wizard_db_password:-}" in
-  '') fail "数据库密码不能为空" ;;
-esac
-[ "${#wizard_db_password}" -ge 12 ] || fail "数据库密码长度至少 12 位"
-
-# 密码含 YAML/shell 特殊字符时风险最高，这里只做最小必要限制
-case "$wizard_db_password" in
-  *[\"\'\`\$\\]*|*" "*) fail "数据库密码请勿包含引号、反引号、美元符、反斜杠或空格" ;;
-esac
-
-# ---------- 2. 运行时目录（TRIM_PKGVAR 即飞牛持久卷，重装 FPK 不丢） ----------
-mkdir -p \
-  "$TRIM_PKGVAR/data/secret" \
-  "$TRIM_PKGVAR/data/reports" \
-  "$TRIM_PKGVAR/data/geoip" \
-  "$TRIM_PKGVAR/logs" \
-  "$TRIM_PKGVAR/mysql" \
-  "$TRIM_PKGVAR/prometheus" || fail "运行时目录创建失败"
-
-chmod 0700 "$TRIM_PKGVAR/data/secret" || fail "密钥目录权限设置失败"
-
-# ---------- 3. 渲染应用配置（不落任何明文密钥） ----------
-cat > "$TRIM_PKGVAR/data/metalwatch.yaml" <<YAML
+# 应用配置（不含任何密钥，密钥由应用首次启动时自行生成）
+cat > "$CONF_FILE" <<YAML
 server:
-  port: ${port}
-  timezone: "${wizard_timezone:-Asia/Shanghai}"
+  port: ${PORT}
+  timezone: "${TIMEZONE}"
+  log_level: "${LOG_LEVEL}"
 collect:
-  ipmi_concurrency: ${concurrency}
-  sensor_interval: ${sensor_interval}
+  ipmi_concurrency: ${CONCURRENCY}
+  sensor_interval: ${SENSOR_INTERVAL}
   asset_interval: 86400
   smart_interval: 900
+  # 同一 BMC 串行，连续失败 3 次进入指数退避（上限 30 分钟）
+  bmc_serial: true
+  bmc_retry_max: 3
+  bmc_backoff_max_sec: 1800
 retention:
-  metrics_days: ${retention}
+  raw_days: 7
+  agg_days: ${RETENTION_DAYS}
+geoip:
+  enabled: ${GEOIP_ENABLE}
+  mmdb_dir: "${TRIM_PKGVAR}/data/geoip"
 alert:
-  webhook: "${wizard_alert_webhook:-}"
-storage:
-  data_dir: "${TRIM_PKGVAR}/data"
-  share_dir: "${TRIM_DATA_SHARE_PATHS%%:*}"
-log:
-  level: "${wizard_log_level:-info}"
+  webhook_url: "${WEBHOOK}"
 YAML
 
-chmod 0640 "$TRIM_PKGVAR/data/metalwatch.yaml" || fail "应用配置文件权限设置失败"
+chmod 0640 "$CONF_FILE" 2>/dev/null
 
-echo "MetalWatch 初始化完成，版本 ${TRIM_APPVER}"
+# 管理员引导：应用首次启动时创建账号并立即删除该文件（避免明文密码常驻）
+BOOTSTRAP="${DATA_DIR}/.bootstrap_admin"
+umask 077
+printf '%s\n%s\n' "$ADMIN_USER" "$ADMIN_PASSWORD" > "$BOOTSTRAP"
+chmod 0600 "$BOOTSTRAP" 2>/dev/null
+
+log_msg "安装初始化完成：port=${PORT} concurrency=${CONCURRENCY} retention=${RETENTION_DAYS}d"
 exit 0

@@ -1,42 +1,152 @@
 #!/bin/bash
 # MetalWatch 生命周期：start / stop / status
-# start / stop 由飞牛 fnOS 依据 docker-project 资源处理，这里只做前置检查与状态判定。
+# 原生应用形态：进程由本脚本管理（PID 文件 + TERM→KILL），无容器运行时依赖。
 set -u
 
-CONTAINER_NAME="metalwatch-api"
-LOG="$TRIM_TEMP_LOGFILE"
+APP_DIR="${TRIM_APPDEST}/server"
+APP_BIN="${APP_DIR}/metalwatch"
+CONF_FILE="${TRIM_PKGETC}/metalwatch.yaml"
+DATA_DIR="${TRIM_PKGVAR}/data"
+LOG_DIR="${TRIM_PKGVAR}/logs"
+LOG_FILE="${LOG_DIR}/metalwatch.log"
+PID_FILE="${TRIM_PKGVAR}/metalwatch.pid"
+PORT="${TRIM_SERVICE_PORT:-18080}"
 
-is_running() {
-  docker inspect -f '{{.State.Running}}' "$CONTAINER_NAME" 2>/dev/null | grep -q 'true'
+log_msg() {
+  mkdir -p "$LOG_DIR" 2>/dev/null
+  echo "$(date '+%Y-%m-%d %H:%M:%S') - $1" >> "$LOG_FILE"
+}
+
+fail() {
+  # 用户可见错误：写在退出前，简短并给出下一步动作
+  echo "$1" > "$TRIM_TEMP_LOGFILE"
+  log_msg "ERROR: $1"
+  exit 1
+}
+
+read_pid() {
+  [ -f "$PID_FILE" ] || return 1
+  head -n 1 "$PID_FILE" | tr -d '[:space:]'
+}
+
+status_app() {
+  local pid
+  pid="$(read_pid)" || return 1
+  if [ -n "$pid" ] && kill -0 "$pid" 2>/dev/null; then
+    return 0
+  fi
+  # PID 文件残留：清理后视为未运行
+  rm -f "$PID_FILE"
+  return 1
+}
+
+probe_http() {
+  if command -v curl >/dev/null 2>&1; then
+    curl -sf --max-time 2 "http://127.0.0.1:${PORT}/healthz" >/dev/null 2>&1 && return 0
+  elif command -v wget >/dev/null 2>&1; then
+    wget -q -T 2 -O /dev/null "http://127.0.0.1:${PORT}/healthz" >/dev/null 2>&1 && return 0
+  else
+    return 1
+  fi
+  return 1
+}
+
+prepare_dirs() {
+  mkdir -p "$DATA_DIR" "$DATA_DIR/secret" "$DATA_DIR/tsdb" "$LOG_DIR" || return 1
+  chmod 0700 "$DATA_DIR/secret" 2>/dev/null
+}
+
+start_app() {
+  if status_app; then
+    log_msg "已在运行，跳过启动"
+    return 0
+  fi
+
+  [ -x "$APP_BIN" ] || fail "应用二进制缺失或不可执行：${APP_BIN}，请重新安装 MetalWatch。"
+  [ -f "$CONF_FILE" ] || fail "缺少配置文件 ${CONF_FILE}，请先在应用设置中完成配置后重试。"
+  prepare_dirs || fail "无法创建数据目录 ${DATA_DIR}，请检查存储空间权限。"
+
+  log_msg "启动 MetalWatch ${TRIM_APPVER:-} (port=${PORT})"
+  cd "$APP_DIR" || fail "无法进入应用目录 ${APP_DIR}。"
+
+  "$APP_BIN" \
+    --config "$CONF_FILE" \
+    --data "$DATA_DIR" \
+    --listen "0.0.0.0:${PORT}" \
+    --log-dir "$LOG_DIR" \
+    --pid-file "$PID_FILE" \
+    >> "$LOG_FILE" 2>&1 &
+
+  echo "$!" > "$PID_FILE"
+
+  local i=0
+  while [ "$i" -lt 15 ]; do
+    if ! status_app; then
+      fail "MetalWatch 进程启动后立即退出，请查看 ${LOG_FILE}。"
+    fi
+    if probe_http; then
+      log_msg "启动完成"
+      return 0
+    fi
+    sleep 1
+    i=$((i + 1))
+  done
+
+  # 进程活着但 HTTP 未就绪：留给用户可诊断的信息，不直接判定失败
+  log_msg "进程已启动，但 15 秒内未就绪（端口 ${PORT}）"
+  echo "MetalWatch 已启动但端口 ${PORT} 未就绪，请查看 ${LOG_FILE}（可能端口被占用）。" > "$TRIM_TEMP_LOGFILE"
+  return 0
+}
+
+stop_app() {
+  local pid i
+  pid="$(read_pid)" || return 0
+
+  if [ -z "$pid" ] || ! kill -0 "$pid" 2>/dev/null; then
+    rm -f "$PID_FILE"
+    return 0
+  fi
+
+  log_msg "停止 MetalWatch (pid=${pid})"
+  kill -TERM "$pid" 2>/dev/null
+
+  i=0
+  while kill -0 "$pid" 2>/dev/null && [ "$i" -lt 15 ]; do
+    sleep 1
+    i=$((i + 1))
+  done
+
+  if kill -0 "$pid" 2>/dev/null; then
+    log_msg "进程未响应 TERM，发送 KILL"
+    kill -KILL "$pid" 2>/dev/null
+  fi
+
+  rm -f "$PID_FILE"
+  # 统一网关模式下的 socket 残留
+  rm -f "${TRIM_PKGVAR}/metalwatch.sock"
+  return 0
 }
 
 case "${1:-}" in
   start)
-    # 首次启动保证运行时目录存在（幂等）
-    for d in data data/secret mysql prometheus; do
-      mkdir -p "$TRIM_PKGVAR/$d"
-    done
-    if [ ! -f "$TRIM_PKGVAR/data/metalwatch.yaml" ]; then
-      echo "应用配置缺失，请先在应用设置中完成配置。" > "$LOG"
-      exit 1
-    fi
-    exit 0
+    start_app
+    exit $?
     ;;
 
   stop)
-    exit 0
+    stop_app
+    exit $?
     ;;
 
   status)
-    if is_running; then
+    if status_app; then
       exit 0
     fi
-    # 3 = 未运行
     exit 3
     ;;
 
   *)
-    echo "未知操作: ${1:-}" > "$LOG"
+    echo "未知操作: ${1:-}" > "$TRIM_TEMP_LOGFILE"
     exit 1
     ;;
 esac

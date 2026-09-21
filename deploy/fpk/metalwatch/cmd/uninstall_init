@@ -1,40 +1,49 @@
 #!/bin/bash
-# 卸载前：按用户在 wizard/uninstall 中的选择处理数据
+# 卸载前：按用户选择处理数据（原生应用，数据全在 TRIM_PKGVAR）
+# 铁律：只清理本应用自己的目录，绝不动共享目录中的其它内容与其它应用数据。
 set -u
 
-LOG="$TRIM_TEMP_LOGFILE"
+DATA_DIR="${TRIM_PKGVAR}/data"
+LOG_DIR="${TRIM_PKGVAR}/logs"
+LOG_FILE="${LOG_DIR}/metalwatch.log"
 KEEP="${wizard_uninstall_keep_data:-true}"
 
-backup_to_share() {
-  # 第一段共享目录路径作为备份落点
+log_msg() {
+  mkdir -p "$LOG_DIR" 2>/dev/null
+  echo "$(date '+%Y-%m-%d %H:%M:%S') - $1" >> "$LOG_FILE"
+}
+
+# 把体积小、价值高的元数据库备份到共享目录（时序库可能数 GB，不在此处复制）
+backup_metadata() {
   share="${TRIM_DATA_SHARE_PATHS%%:*}"
   [ -n "$share" ] && [ -d "$share" ] || return 0
 
-  dest="$share/metalwatch-backup-$(date +%Y%m%d%H%M%S)"
-  mkdir -p "$dest" || return 1
+  dest="${share}/metalwatch-backup-$(date +%Y%m%d%H%M%S)"
+  mkdir -p "$dest" || return 0
 
-  # 导出数据库（容器仍在时执行）
-  if docker inspect -f '{{.State.Running}}' metalwatch-db 2>/dev/null | grep -q 'true'; then
-    docker exec metalwatch-db \
-      mysqldump -u root -p"${wizard_db_password}" --single-transaction --routines metalwatch \
-      > "$dest/metalwatch.sql" 2>/dev/null || rm -f "$dest/metalwatch.sql"
-  fi
+  for f in metalwatch.db metalwatch.db-wal metalwatch.db-shm; do
+    [ -f "${DATA_DIR}/${f}" ] && cp -f "${DATA_DIR}/${f}" "${dest}/" 2>/dev/null
+  done
+  # 配置与日志一并留存，便于事后排查
+  [ -f "${TRIM_PKGETC}/metalwatch.yaml" ] && cp -f "${TRIM_PKGETC}/metalwatch.yaml" "${dest}/" 2>/dev/null
+  [ -f "${LOG_FILE}" ] && cp -f "${LOG_FILE}" "${dest}/" 2>/dev/null
 
-  cp -a "$TRIM_PKGVAR/data" "$dest/data" 2>/dev/null || true
-  cp -a "$TRIM_PKGVAR/mysql" "$dest/mysql" 2>/dev/null || true
-  echo "已备份卸载前数据到：$dest" > "$LOG"
+  log_msg "已备份元数据到 ${dest}"
+  echo "已备份 MetalWatch 元数据到：${dest}"
 }
 
 case "$KEEP" in
   true|TRUE|1|yes)
-    backup_to_share
-    echo "已保留应用数据（${TRIM_PKGVAR}）。重新安装 MetalWatch 后将自动复用。" > "$LOG"
+    backup_metadata > "$TRIM_TEMP_LOGFILE"
+    log_msg "用户选择保留数据，运行数据保持原地（${TRIM_PKGVAR}）"
     ;;
   *)
-    backup_to_share
-    # 只清理本应用自己的运行时目录，绝不动共享目录与其它应用数据
-    rm -rf "$TRIM_PKGVAR/data" "$TRIM_PKGVAR/mysql" "$TRIM_PKGVAR/prometheus" "$TRIM_PKGVAR/logs"
-    echo "已删除 MetalWatch 运行时数据。" > "$LOG"
+    backup_metadata >> "$TRIM_TEMP_LOGFILE"
+    log_msg "用户选择删除数据，开始清理本应用目录"
+    rm -rf "$DATA_DIR" "$LOG_DIR"
+    rm -f "${TRIM_PKGVAR}/metalwatch.pid" "${TRIM_PKGVAR}/metalwatch.sock"
+    echo "已删除 MetalWatch 运行数据（元数据已备份到共享目录）。" > "$TRIM_TEMP_LOGFILE"
+    log_msg "清理完成"
     ;;
 esac
 

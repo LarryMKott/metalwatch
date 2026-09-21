@@ -3,7 +3,7 @@ version=0.1.0
 display_name=MetalWatch
 desc=硬件服务器监控：跨平台 Agent + IPMI 带外采集，硬件资产、传感器、SMART/RAID、硬件变更与告警。
 source=thirdparty
-platform=all
+platform=x86
 
 maintainer=MetalWatch Team
 
@@ -13,4 +13,4 @@ desktop_applaunchname=metalwatch.main
 service_port=18080
 checkport=true
 ctl_stop=true
-changelog=初始版本：FPK 应用框架、资产管理、Agent/IPMI 采集、告警、WebUI。
+changelog=初始版本：原生应用形态（单进程 + 嵌入式存储），资产管理、Agent/IPMI 采集、告警、WebUI。
