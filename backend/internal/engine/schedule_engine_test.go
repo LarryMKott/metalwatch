@@ -6,7 +6,7 @@ import (
 	"testing"
 	"time"
 
-	"gitee.com/zhangyilin_233/metalwatch/internal/task"
+	"github.com/LarryMKott/metalwatch/internal/task"
 )
 
 func TestScheduleTickBasic(t *testing.T) {

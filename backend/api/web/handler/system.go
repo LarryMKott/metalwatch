@@ -8,9 +8,9 @@ import (
 
 	"github.com/gin-gonic/gin"
 
-	"gitee.com/zhangyilin_233/metalwatch/internal/adapter"
-	"gitee.com/zhangyilin_233/metalwatch/internal/app"
-	"gitee.com/zhangyilin_233/metalwatch/pkg/utils"
+	"github.com/LarryMKott/metalwatch/internal/adapter"
+	"github.com/LarryMKott/metalwatch/internal/app"
+	"github.com/LarryMKott/metalwatch/pkg/utils"
 )
 
 // Health 是存活与就绪探针：任一存储不可用即 503，便于外部监控直接告警。

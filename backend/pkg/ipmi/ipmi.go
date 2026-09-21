@@ -15,7 +15,7 @@ import (
 	"strings"
 	"time"
 
-	mwpb "gitee.com/zhangyilin_233/metalwatch/proto/gen"
+	mwpb "github.com/LarryMKott/metalwatch/proto/gen"
 )
 
 // Executor 执行一次 ipmitool 调用。注入它以解耦逻辑与真机，便于测试。

@@ -308,7 +308,7 @@ const file_bmc_proto_rawDesc = "" +
 	"\vsensor_read\x18\x04 \x01(\bR\n" +
 	"sensorRead\x12\x1b\n" +
 	"\tbmc_model\x18\x05 \x01(\tR\bbmcModel\x12)\n" +
-	"\x10firmware_version\x18\x06 \x01(\tR\x0ffirmwareVersionB4Z2gitee.com/zhangyilin_233/metalwatch/proto/gen;mwpbb\x06proto3"
+	"\x10firmware_version\x18\x06 \x01(\tR\x0ffirmwareVersionB1Z/github.com/LarryMKott/metalwatch/proto/gen;mwpbb\x06proto3"
 
 var (
 	file_bmc_proto_rawDescOnce sync.Once

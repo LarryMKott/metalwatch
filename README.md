@@ -17,7 +17,7 @@ MetalWatch/
 ├── frontend/     Vue3 + TypeScript（Vite + Pinia + vue-router；Node 22/24 双兼容）
 ├── agent/        跨平台 Agent（仅标准库；linux / windows 分平台实现）
 ├── deploy/       FPK 工程 + 构建脚本 + 开发用 Docker 环境
-└── docs/         01 决策 · 02 模块 · 03 数据 · 04 契约 · 05 计划 · 06 实测记录
+└── docs/         01-架构 · 02-设计 · 03-计划 · 04-部署 · 05-记录（见 docs/README.md）
 ```
 
 ## 快速开始

@@ -2,7 +2,7 @@ syntax = "proto3";
 
 package metalwatch.mesh;
 
-option go_package = "gitee.com/zhangyilin_233/metalwatch/proto/gen;mwpb";
+option go_package = "github.com/LarryMKott/metalwatch/proto/gen;mwpb";
 
 // MeshHeader 是跨 Agent 转发消息的公共头，所有经中继的消息都必须携带。
 // 防环路依赖 hop_count 与 path：转发前检查自身是否已在 path 中。

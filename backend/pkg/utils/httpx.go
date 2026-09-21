@@ -13,7 +13,7 @@ import (
 
 	"github.com/gin-gonic/gin"
 
-	"gitee.com/zhangyilin_233/metalwatch/internal/service"
+	"github.com/LarryMKott/metalwatch/internal/service"
 )
 
 // ErrorBody 是统一错误响应体（契约见 docs/04）。

@@ -5,7 +5,7 @@ package metalwatch.agent;
 import "mesh.proto";
 import "bmc.proto";
 
-option go_package = "gitee.com/zhangyilin_233/metalwatch/proto/gen;mwpb";
+option go_package = "github.com/LarryMKott/metalwatch/proto/gen;mwpb";
 
 // MetalWatch Agent ↔ 服务端通信契约（gRPC 双向流 + Protobuf + TLS）
 //

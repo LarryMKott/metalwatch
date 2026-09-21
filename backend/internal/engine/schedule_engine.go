@@ -7,7 +7,7 @@ import (
 	"sync"
 	"time"
 
-	"gitee.com/zhangyilin_233/metalwatch/internal/task"
+	"github.com/LarryMKott/metalwatch/internal/task"
 )
 
 // TargetKind 区分采集目标类型，对应不同的默认采集周期。

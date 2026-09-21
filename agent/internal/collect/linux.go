@@ -10,7 +10,7 @@ import (
 	"strings"
 	"time"
 
-	"gitee.com/zhangyilin_233/metalwatch/agent/internal/model"
+	"github.com/LarryMKott/metalwatch/agent/internal/model"
 )
 
 // platformSteps 注册 Linux 采集项。

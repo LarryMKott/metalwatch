@@ -4,7 +4,7 @@ import (
 	"math"
 	"testing"
 
-	mwpb "gitee.com/zhangyilin_233/metalwatch/proto/gen"
+	mwpb "github.com/LarryMKott/metalwatch/proto/gen"
 )
 
 func probe(from, to string, rtt, loss float64) *mwpb.LinkProbe {

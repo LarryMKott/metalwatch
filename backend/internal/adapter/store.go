@@ -16,7 +16,7 @@ import (
 	"strings"
 	"sync"
 
-	"gitee.com/zhangyilin_233/metalwatch/pkg/config"
+	"github.com/LarryMKott/metalwatch/pkg/config"
 )
 
 // Dialect 标识底层数据库方言。

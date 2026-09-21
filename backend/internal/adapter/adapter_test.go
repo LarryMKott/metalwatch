@@ -7,10 +7,10 @@ import (
 	"testing"
 	"time"
 
-	"gitee.com/zhangyilin_233/metalwatch/internal/adapter"
-	_ "gitee.com/zhangyilin_233/metalwatch/internal/adapter/sqlite"
-	"gitee.com/zhangyilin_233/metalwatch/migrations"
-	"gitee.com/zhangyilin_233/metalwatch/pkg/config"
+	"github.com/LarryMKott/metalwatch/internal/adapter"
+	_ "github.com/LarryMKott/metalwatch/internal/adapter/sqlite"
+	"github.com/LarryMKott/metalwatch/migrations"
+	"github.com/LarryMKott/metalwatch/pkg/config"
 )
 
 // newStore 建一个临时目录里的 SQLite 存储并跑完迁移。

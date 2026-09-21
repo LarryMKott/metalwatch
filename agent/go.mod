@@ -1,4 +1,4 @@
-module gitee.com/zhangyilin_233/metalwatch/agent
+module github.com/LarryMKott/metalwatch/agent
 
 go 1.25.0
 

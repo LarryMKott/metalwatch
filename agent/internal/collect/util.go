@@ -3,7 +3,7 @@ package collect
 import (
 	"net"
 
-	"gitee.com/zhangyilin_233/metalwatch/agent/internal/model"
+	"github.com/LarryMKott/metalwatch/agent/internal/model"
 )
 
 // agentVersion 由 main 通过 SetVersion 注入，避免各平台文件重复定义。

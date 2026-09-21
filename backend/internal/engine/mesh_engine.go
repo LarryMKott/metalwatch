@@ -17,7 +17,7 @@ import (
 	"sort"
 	"sync"
 
-	mwpb "gitee.com/zhangyilin_233/metalwatch/proto/gen"
+	mwpb "github.com/LarryMKott/metalwatch/proto/gen"
 )
 
 // MeshConfig 是拓扑计算的权重系数与上限配置。

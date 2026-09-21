@@ -15,9 +15,9 @@ import (
 	"syscall"
 	"time"
 
-	"gitee.com/zhangyilin_233/metalwatch/agent/internal/collect"
-	"gitee.com/zhangyilin_233/metalwatch/agent/internal/heartbeat"
-	"gitee.com/zhangyilin_233/metalwatch/agent/internal/report"
+	"github.com/LarryMKott/metalwatch/agent/internal/collect"
+	"github.com/LarryMKott/metalwatch/agent/internal/heartbeat"
+	"github.com/LarryMKott/metalwatch/agent/internal/report"
 )
 
 const version = "0.1.0"

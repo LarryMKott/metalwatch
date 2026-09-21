@@ -12,7 +12,7 @@ import (
 	"sort"
 	"strings"
 
-	"gitee.com/zhangyilin_233/metalwatch/agent/internal/model"
+	"github.com/LarryMKott/metalwatch/agent/internal/model"
 )
 
 // Collector 负责把本机硬件状态采集为 model.Report。

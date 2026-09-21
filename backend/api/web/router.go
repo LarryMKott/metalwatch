@@ -5,10 +5,10 @@ import (
 
 	"github.com/gin-gonic/gin"
 
-	"gitee.com/zhangyilin_233/metalwatch/api/agentpb"
-	"gitee.com/zhangyilin_233/metalwatch/api/web/handler"
-	"gitee.com/zhangyilin_233/metalwatch/pkg/utils"
-	"gitee.com/zhangyilin_233/metalwatch/internal/app"
+	"github.com/LarryMKott/metalwatch/api/agentpb"
+	"github.com/LarryMKott/metalwatch/api/web/handler"
+	"github.com/LarryMKott/metalwatch/pkg/utils"
+	"github.com/LarryMKott/metalwatch/internal/app"
 )
 
 // NewRouter 组装前端 REST 路由，并挂载 Agent 上报路由。

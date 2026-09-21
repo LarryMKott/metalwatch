@@ -1,4 +1,4 @@
-module gitee.com/zhangyilin_233/metalwatch
+module github.com/LarryMKott/metalwatch
 
 go 1.25.0
 

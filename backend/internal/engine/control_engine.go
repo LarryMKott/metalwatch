@@ -4,7 +4,7 @@ import (
 	"sync"
 	"time"
 
-	mwpb "gitee.com/zhangyilin_233/metalwatch/proto/gen"
+	mwpb "github.com/LarryMKott/metalwatch/proto/gen"
 )
 
 // FanCurvePoint 是分段调速曲线的一段：温度不超过 TempMax（含）时目标转速为 SpeedPercent。

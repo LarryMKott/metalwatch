@@ -6,7 +6,7 @@ import (
 	"strconv"
 	"time"
 
-	"gitee.com/zhangyilin_233/metalwatch/agent/internal/collect"
+	"github.com/LarryMKott/metalwatch/agent/internal/collect"
 )
 
 // Loop 按固定周期采集并上报，直到 ctx 取消。

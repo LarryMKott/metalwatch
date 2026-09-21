@@ -5,7 +5,7 @@ import (
 	"strings"
 	"testing"
 
-	mwpb "gitee.com/zhangyilin_233/metalwatch/proto/gen"
+	mwpb "github.com/LarryMKott/metalwatch/proto/gen"
 )
 
 // fakeExecutor 是内存假执行器：记录调用参数并返回预设输出，便于断言指令翻译。

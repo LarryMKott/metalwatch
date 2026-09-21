@@ -11,7 +11,7 @@ import (
 	"regexp"
 	"strings"
 
-	"gitee.com/zhangyilin_233/metalwatch/internal/adapter"
+	"github.com/LarryMKott/metalwatch/internal/adapter"
 )
 
 // 领域错误：API 层据此映射 HTTP 状态码。

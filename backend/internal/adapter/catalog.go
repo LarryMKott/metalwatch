@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"sync"
 
-	"gitee.com/zhangyilin_233/metalwatch/pkg/config"
+	"github.com/LarryMKott/metalwatch/pkg/config"
 )
 
 // 时序后端驱动名。

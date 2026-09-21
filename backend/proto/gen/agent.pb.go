@@ -1316,7 +1316,7 @@ const file_agent_proto_rawDesc = "" +
 	"serverTime2\xaf\x01\n" +
 	"\x12AgentStreamService\x12L\n" +
 	"\x06Stream\x12\x1d.metalwatch.agent.AgentReport\x1a\x1f.metalwatch.agent.ServerCommand(\x010\x01\x12K\n" +
-	"\x06Enroll\x12\x1f.metalwatch.agent.EnrollRequest\x1a .metalwatch.agent.EnrollResponseB4Z2gitee.com/zhangyilin_233/metalwatch/proto/gen;mwpbb\x06proto3"
+	"\x06Enroll\x12\x1f.metalwatch.agent.EnrollRequest\x1a .metalwatch.agent.EnrollResponseB1Z/github.com/LarryMKott/metalwatch/proto/gen;mwpbb\x06proto3"
 
 var (
 	file_agent_proto_rawDescOnce sync.Once

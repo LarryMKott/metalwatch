@@ -13,7 +13,7 @@ import (
 
 	"github.com/gin-gonic/gin"
 
-	"gitee.com/zhangyilin_233/metalwatch/internal/app"
+	"github.com/LarryMKott/metalwatch/internal/app"
 )
 
 // RegisterRoutes 挂载 Agent 通道路由。由 api/web 的路由装配调用。

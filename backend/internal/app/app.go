@@ -8,10 +8,10 @@ import (
 	"log/slog"
 	"time"
 
-	"gitee.com/zhangyilin_233/metalwatch/internal/adapter"
-	"gitee.com/zhangyilin_233/metalwatch/internal/service"
-	"gitee.com/zhangyilin_233/metalwatch/internal/task"
-	"gitee.com/zhangyilin_233/metalwatch/pkg/config"
+	"github.com/LarryMKott/metalwatch/internal/adapter"
+	"github.com/LarryMKott/metalwatch/internal/service"
+	"github.com/LarryMKott/metalwatch/internal/task"
+	"github.com/LarryMKott/metalwatch/pkg/config"
 )
 
 // Deps 是应用运行期的依赖集合。

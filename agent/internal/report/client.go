@@ -19,7 +19,7 @@ import (
 	"strings"
 	"time"
 
-	"gitee.com/zhangyilin_233/metalwatch/agent/internal/model"
+	"github.com/LarryMKott/metalwatch/agent/internal/model"
 )
 
 // Options 是客户端配置。

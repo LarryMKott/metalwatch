@@ -7,10 +7,10 @@ import (
 
 	"github.com/gin-gonic/gin"
 
-	"gitee.com/zhangyilin_233/metalwatch/internal/adapter"
-	"gitee.com/zhangyilin_233/metalwatch/internal/app"
-	"gitee.com/zhangyilin_233/metalwatch/pkg/crypto"
-	"gitee.com/zhangyilin_233/metalwatch/pkg/utils"
+	"github.com/LarryMKott/metalwatch/internal/adapter"
+	"github.com/LarryMKott/metalwatch/internal/app"
+	"github.com/LarryMKott/metalwatch/pkg/crypto"
+	"github.com/LarryMKott/metalwatch/pkg/utils"
 )
 
 // CtxTokenKey 是 Agent 令牌在请求上下文中的键。

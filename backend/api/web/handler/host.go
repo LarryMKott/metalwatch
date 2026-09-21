@@ -8,10 +8,10 @@ import (
 
 	"github.com/gin-gonic/gin"
 
-	"gitee.com/zhangyilin_233/metalwatch/pkg/utils"
-	"gitee.com/zhangyilin_233/metalwatch/internal/adapter"
-	"gitee.com/zhangyilin_233/metalwatch/internal/app"
-	"gitee.com/zhangyilin_233/metalwatch/internal/service"
+	"github.com/LarryMKott/metalwatch/pkg/utils"
+	"github.com/LarryMKott/metalwatch/internal/adapter"
+	"github.com/LarryMKott/metalwatch/internal/app"
+	"github.com/LarryMKott/metalwatch/internal/service"
 )
 
 // HostDTO 是资产对外的 JSON 表示（字段名与 docs/04 契约一致）。

@@ -15,14 +15,14 @@ import (
 
 	"github.com/gin-gonic/gin"
 
-	"gitee.com/zhangyilin_233/metalwatch/api/web"
-	"gitee.com/zhangyilin_233/metalwatch/internal/adapter"
-	_ "gitee.com/zhangyilin_233/metalwatch/internal/adapter/sqlite"
-	"gitee.com/zhangyilin_233/metalwatch/internal/app"
-	"gitee.com/zhangyilin_233/metalwatch/internal/service"
-	"gitee.com/zhangyilin_233/metalwatch/migrations"
-	"gitee.com/zhangyilin_233/metalwatch/pkg/config"
-	"gitee.com/zhangyilin_233/metalwatch/pkg/crypto"
+	"github.com/LarryMKott/metalwatch/api/web"
+	"github.com/LarryMKott/metalwatch/internal/adapter"
+	_ "github.com/LarryMKott/metalwatch/internal/adapter/sqlite"
+	"github.com/LarryMKott/metalwatch/internal/app"
+	"github.com/LarryMKott/metalwatch/internal/service"
+	"github.com/LarryMKott/metalwatch/migrations"
+	"github.com/LarryMKott/metalwatch/pkg/config"
+	"github.com/LarryMKott/metalwatch/pkg/crypto"
 )
 
 func newTestServer(t *testing.T) (*gin.Engine, *adapter.Store) {

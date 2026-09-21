@@ -365,7 +365,7 @@ const file_mesh_proto_rawDesc = "" +
 	"\vcomputed_at\x18\x02 \x01(\x03R\n" +
 	"computedAt\x125\n" +
 	"\aentries\x18\x03 \x03(\v2\x1b.metalwatch.mesh.RouteEntryR\aentries\x12\x19\n" +
-	"\bmax_hops\x18\x04 \x01(\rR\amaxHopsB4Z2gitee.com/zhangyilin_233/metalwatch/proto/gen;mwpbb\x06proto3"
+	"\bmax_hops\x18\x04 \x01(\rR\amaxHopsB1Z/github.com/LarryMKott/metalwatch/proto/gen;mwpbb\x06proto3"
 
 var (
 	file_mesh_proto_rawDescOnce sync.Once

@@ -13,8 +13,8 @@ import (
 	"path/filepath"
 	"time"
 
-	"gitee.com/zhangyilin_233/metalwatch/internal/adapter"
-	"gitee.com/zhangyilin_233/metalwatch/pkg/config"
+	"github.com/LarryMKott/metalwatch/internal/adapter"
+	"github.com/LarryMKott/metalwatch/pkg/config"
 
 	_ "modernc.org/sqlite" // 纯 Go 驱动：必须免 CGO 才能静态编译（见 docs/01 D14）
 )
