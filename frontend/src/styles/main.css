@@ -1,0 +1,96 @@
+/* 全局样式：监控后台深色主题（红=异常、绿=正常） */
+:root {
+  color-scheme: dark;
+  --mw-bg: #020617;
+  --mw-panel: #0f172a;
+  --mw-panel-2: #111827;
+  --mw-border: #1e293b;
+  --mw-text: #e2e8f0;
+  --mw-text-dim: #94a3b8;
+  --mw-accent: #38bdf8;
+  --mw-ok: #22c55e;
+  --mw-warn: #f59e0b;
+  --mw-crit: #ef4444;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body,
+#app {
+  height: 100%;
+}
+
+body {
+  margin: 0;
+  background: var(--mw-bg);
+  color: var(--mw-text);
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Hiragino Sans GB',
+    'Microsoft YaHei', sans-serif;
+  font-size: 14px;
+}
+
+a {
+  color: var(--mw-accent);
+  text-decoration: none;
+}
+
+.mw-card {
+  background: var(--mw-panel);
+  border: 1px solid var(--mw-border);
+  border-radius: 10px;
+  padding: 14px 16px;
+}
+
+.mw-btn {
+  background: var(--mw-panel-2);
+  color: var(--mw-text);
+  border: 1px solid var(--mw-border);
+  border-radius: 6px;
+  padding: 6px 12px;
+  cursor: pointer;
+}
+
+.mw-btn:hover {
+  border-color: var(--mw-accent);
+}
+
+.mw-tag {
+  display: inline-block;
+  font-size: 12px;
+  border-radius: 999px;
+  padding: 1px 8px;
+  border: 1px solid var(--mw-border);
+  color: var(--mw-text-dim);
+}
+
+.mw-tag.ok {
+  color: var(--mw-ok);
+  border-color: color-mix(in srgb, var(--mw-ok) 40%, transparent);
+}
+.mw-tag.warn {
+  color: var(--mw-warn);
+  border-color: color-mix(in srgb, var(--mw-warn) 40%, transparent);
+}
+.mw-tag.crit {
+  color: var(--mw-crit);
+  border-color: color-mix(in srgb, var(--mw-crit) 40%, transparent);
+}
+
+.mw-table {
+  width: 100%;
+  border-collapse: collapse;
+}
+.mw-table th,
+.mw-table td {
+  text-align: left;
+  padding: 8px 10px;
+  border-bottom: 1px solid var(--mw-border);
+}
+.mw-table th {
+  color: var(--mw-text-dim);
+  font-weight: 500;
+  font-size: 12px;
+}

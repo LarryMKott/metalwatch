@@ -1,0 +1,57 @@
+# MetalWatch 服务端配置示例
+#
+# 生产环境由 FPK 的 cmd/install_callback 与 cmd/config_callback 依据向导输入渲染到
+# $TRIM_PKGETC/metalwatch.yaml；本文件仅作为开发期样例与字段说明。
+#
+# 优先级：内置默认值 < 本文件 < 环境变量（METALWATCH_*）
+
+server:
+  port: 18080                 # 必须与 FPK manifest.service_port 及 app/ui/config 的 port 一致
+  timezone: "Asia/Shanghai"
+  log_level: "info"           # debug | info | warn | error
+  # data_dir / log_dir 由命令行 --data / --log-dir 注入（对应 TRIM_PKGVAR/data、/logs）
+
+# ---------------- 存储（默认 SQLite，支持独立部署） ----------------
+db:
+  driver: "sqlite"            # sqlite（默认，零部署） | postgres（独立部署）
+  # 使用独立部署的数据库时填写以下两项；DSN 含口令，建议走环境变量 METALWATCH_DB_DSN
+  # dsn: "postgres://metalwatch:******@10.0.0.5:5432/metalwatch?sslmode=require"
+  dsn: ""
+  # file: ""                  # 留空则由 data_dir/metalwatch.db 推导
+  max_open_conns: 1           # SQLite 单写者：保持 1，避免 SQLITE_BUSY
+  max_idle_conns: 1
+  busy_timeout: 5s
+
+# 时序存储：默认进程内嵌（零依赖），也可切到独立部署的 Prometheus / VictoriaMetrics / InfluxDB2
+timeseries:
+  driver: "embedded"          # embedded | prometheus | victoriametrics | influxdb2
+  # driver 非 embedded 时必填端点，凭据建议走环境变量
+  # endpoint: "http://10.0.0.6:8428"
+  endpoint: ""
+  # username: ""
+  # password: ""
+
+# ---------------- 采集 ----------------
+collect:
+  sensor_interval: 30         # 温度/风扇/电压/功耗采集周期（秒），10~600
+  asset_interval: 86400       # 静态资产快照周期（秒），>=300
+  smart_interval: 900         # SMART / RAID 状态周期（秒），>=300
+  ipmi_concurrency: 16        # 全局并发上限（1~256）；同一 BMC 始终串行
+  bmc_serial: true
+  bmc_retry_max: 3            # 连续失败达到该次数后进入指数退避
+  bmc_backoff_max_sec: 1800   # 退避上限（秒），>=60
+  collect_timeout_sec: 30     # 单次采集超时
+
+# ---------------- 保留 ----------------
+retention:
+  raw_days: 7
+  agg_days: 180
+
+# ---------------- GeoIP ----------------
+geoip:
+  enabled: true
+  mmdb_dir: ""                # 留空则用 data_dir/geoip（内置 Country + ASN）
+
+# ---------------- 告警 ----------------
+alert:
+  webhook_url: ""             # 支持企业微信/钉钉机器人或自建接收端

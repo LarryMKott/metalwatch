@@ -11,6 +11,23 @@ dist/
 deploy/build/
 deploy/fpk/*/target/
 
+# Go
+backend/bin/
+agent/bin/
+backend/static/
+coverage.out
+*.test
+*_test.exe
+
+# 前端
+node_modules/
+.pnpm-store/
+.vite/
+*.tsbuildinfo
+
+# 本地运行数据
+tmp-data/
+
 # Python
 __pycache__/
 *.py[cod]
@@ -37,3 +54,6 @@ secrets/
 .DS_Store
 Thumbs.db
 desktop.ini
+
+# npm 在受限环境下会写出的字面量环境变量目录（Windows only，必需忽略）
+%SystemDrive%/

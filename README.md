@@ -1,98 +1,98 @@
 # MetalWatch
 
-飞牛 fnOS **原生应用**（FPK）形态的**硬件服务器监控**：跨平台 Agent 采集 OS 内硬件状态 + IPMI/BMC 带外采集，统一在飞牛 OS 上做资产、曲线、告警与报表。
+飞牛 fnOS **原生应用**（FPK）形态的**硬件服务器监控**：跨平台 Agent 采集 + IPMI/BMC 带外采集，
+统一在飞牛 OS 上做资产、曲线、告警与报表。
 
-> **架构要点：单进程、零外部依赖。** 一个静态编译的 Go 二进制，前端 `go:embed` 进二进制，元数据存 SQLite 单文件，时序数据存进程内嵌 TSDB —— **不用容器、不装数据库、不拉镜像**，离线内网可部署，常驻内存约 120–250MB。
->
-> 状态：**FPK 打包骨架 + 设计文档已就绪；应用源码尚未开始（下一步见 `docs/05` 的 P1 里程碑）。**
+> **架构一句话**：单进程 Go 服务端（Gin + 可插拔存储，默认 SQLite，**所有数据库都支持独立部署**）+ Vue3 前端
+> + 跨平台 Agent（HTTP/2 + Protobuf）。交付形态是**无容器的 native FPK**：不用容器、不装数据库、不拉镜像。
+
+**当前状态**：工程骨架已落地并**通过构建与测试**（详见 `docs/06-实测记录.md`）；
+业务功能按 `docs/05-开发计划.md` 的 W0–W12 工作流推进。
 
 ## 目录
 
 ```
 MetalWatch/
-├── docs/
-│   ├── 05-开发计划.md               ← 先读这个：架构定型、技术选型、W0-W12 工作分解、里程碑与风险
-│   ├── 01-架构评审与关键决策.md      ← D1-D17（含飞牛能力核对与三处 PRD 降级项）
-│   ├── 02-模块需求拆解与验收.md      ← M1~M9 模块与验收标准
-│   ├── 03-数据设计.md               ← SQLite 表结构 DDL + 内嵌时序存储设计 + 容量测算
-│   └── 04-接口契约.md               ← Agent 上报协议 / 管理 API / Webhook / 鉴权
-└── deploy/
-    ├── fpk/metalwatch/              ← 可直接 fnpack build 的 FPK 工程
-    │   ├── manifest                 ← 应用身份（platform=x86、service_port=18080）
-    │   ├── ICON.PNG / ICON_256.PNG
-    │   ├── config/privilege         ← 运行身份：package
-    │   ├── config/resource          ← data-share：reports / backups / geoip
-    │   ├── cmd/                     ← main（PID 自管）+ install/config/upgrade/uninstall 回调
-    │   ├── wizard/                  ← install / config / uninstall 向导表单
-    │   └── app/
-    │       ├── server/              ← 打包时放入 metalwatch 二进制（见该目录 README）
-    │       └── ui/                  ← 飞牛桌面入口配置与图标
-    └── tools/
-        ├── gen_icons.py             ← 生成应用图标（纯标准库，可重跑）
-        └── check_fpk.py             ← 骨架校验：强制校验文件、JSON、LF 换行、端口一致、native 形态断言
+├── backend/      Go 服务端（Gin；api / internal{service,task,adapter,app} / pkg / proto / migrations）
+├── frontend/     Vue3 + TypeScript（Vite + Pinia + vue-router；Node 22/24 双兼容）
+├── agent/        跨平台 Agent（仅标准库；linux / windows 分平台实现）
+├── deploy/       FPK 工程 + 构建脚本 + 开发用 Docker 环境
+└── docs/         01 决策 · 02 模块 · 03 数据 · 04 契约 · 05 计划 · 06 实测记录
 ```
 
-## 快速开始（打包）
+## 快速开始
 
 ```bash
-# 0. 前置：飞牛官方打包工具 fnpack（https://developer.fnnas.com/docs/cli/fnpack/）
-#    Windows 下载后无扩展名，重命名为 fnpack.exe
+# 后端：构建 / 测试 / 质量门禁（Windows 上若无 make，可逐条执行等价命令）
+make build          # 前端构建 → go:embed → CGO_ENABLED=0 交叉编译服务端
+make test           # go test ./...
+make race           # go test -race ./...（需 CGO/gcc，本机不可用，CI 必跑）
+make cover          # 覆盖率报告
+make check          # fmt + vet + test + race
 
-# 1. 校验骨架（改完 cmd/、wizard/、manifest 后必跑）
-python deploy/tools/check_fpk.py
+# 端到端
+make pb             # 生成 protobuf 代码（需 protoc）
+make fpk            # 产出飞牛 FPK 安装包（需 fnpack）
 
-# 2. 构建（源码完成后的目标形态，当前尚未实现）
-#    make build          # 前端 vite build → go:embed → CGO_ENABLED=0 交叉编译
-#    make pack           # 拷贝二进制到 app/server → chmod +x → fnpack build
+# 本地运行
+cd backend && go run ./cmd/server serve --config configs/app.yaml --data ./tmp-data
+# → http://127.0.0.1:18080  （/healthz 探针、/api/v1/hosts 资产接口）
 
-# 3. 产物 fpk 上传到飞牛「应用中心 → 手动安装」
-#    或 SSH 安装：appcenter-cli install-fpk metalwatch.fpk
+# 签发 Agent 注册码（明文只出现一次）
+cd backend && go run ./cmd/server agent-code --days 7 --uses 1
 ```
 
-**打包前检查三项**（`check_fpk.py` 已自动覆盖）：
+非 make 环境下的等价命令（本机实测可用）：
 
-1. `manifest`、`config/privilege`、`config/resource`、`ICON.PNG`、`ICON_256.PNG` 齐全；
-2. `manifest.service_port`（18080）= `app/ui/config` 入口 `port`，两处必须一致；
-3. `cmd/` 下脚本是 **LF 换行**且有可执行权限（CRLF 会让 `cmd/main` 在真机上直接失败）。
+```bash
+export GOPROXY=https://goproxy.cn,direct GOSUMDB=off   # proxy.golang.org 在本网络不可达
+go -C backend build ./...
+go -C backend test ./...
+go -C backend vet ./...
+go -C backend run ./cmd/server migrate --data ./tmp-data
+```
+
+## 技术栈
+
+| 层 | 选型 | 说明 |
+| --- | --- | --- |
+| 服务端 | Go 1.23+，Gin 1.12 | `CGO_ENABLED=0` 静态编译；前端产物 `go:embed` |
+| 存储（可插拔） | 默认 **SQLite**（`modernc.org/sqlite`，纯 Go）；MySQL / PostgreSQL / GBase8s 支持**独立部署** | 通过 `db.driver` + `db.dsn` 切换，业务代码零改动 |
+| 时序（可插拔） | 默认**进程内嵌 TSDB**；Prometheus / VictoriaMetrics / InfluxDB2 支持独立部署 | `timeseries.driver` + `timeseries.endpoint` |
+| Agent 通道 | **HTTP/2 + TLS + Protobuf** | 与前端 JSON 通道严格隔离；proto 见 `backend/proto/agent.proto` |
+| 前端 | Vue 3.5 + Composition API + TS + Vite 8 + Pinia + vue-router + ECharts 6 | `engines: ">=22.12.0 <25"` |
+| 打包 | 飞牛 native FPK（`manifest` + `cmd/` + `wizard/` + `app/server/metalwatch`） | 无容器；`platform=x86`，ARM 另出包 |
+
+## 存储后端现状（`GET /api/v1/system/storage/backends` 返回同一份数据）
+
+| 后端 | 类型 | 部署 | 状态 |
+| --- | --- | --- | --- |
+| sqlite | 元数据 | 内嵌 | ✅ 可用（默认） |
+| postgres / mysql / gbase8s | 元数据 | 独立部署 | 规划中（W1c / W2） |
+| embedded | 时序 | 内嵌 | 规划中（W1b） |
+| prometheus / victoriametrics / influxdb2 | 时序 | 独立部署 | 规划中（W1c / W2） |
+
+切换到外部数据库时，开发验证环境一键起：`docker compose -f deploy/docker/docker-compose.dev.yml up -d`
+（**该 compose 不属于交付形态**，仅用于适配器开发验证）。
+
+## 两处已纠正的规格（避免踩坑）
+
+| 原写法 | 问题 | 正确写法 |
+| --- | --- | --- |
+| `deploy/fpk/manifest.yml` | 飞牛清单文件是**无扩展名的 INI 文件**，写成 `.yml` 打包校验直接失败 | `deploy/fpk/metalwatch/manifest`（key=value，LF 换行） |
+| `engines: { "node": ">=22 <=24" }` | 该区间**排除 24.0.1+**，与「兼容 Node24」意图相反 | `">=22.12.0 <25"` |
 
 ## Git 工作流
 
-- **分支**：`main` 为稳定分支，日常开发提交到 `dev`；阶段稳定后 `dev` 合入 `main`。
-- **提交信息**：`类型: 摘要` + 要点列表，类型用 `feat` / `fix` / `docs` / `chore` / `refactor`。
-- **换行符**：`.gitattributes` 强制全仓库 LF。自查：`git ls-files --eol`（应全部 `w/lf`）。
-- **不入库**：`.idea/`、`*.fpk` 构建产物、运行时 `data/`、`logs/`、密钥文件（见 `.gitignore`）。
+- 分支：`main` 稳定 / `dev` 日常开发（当前 HEAD 在 `dev`）；提交信息 `类型: 摘要` + 要点列表。
+- 换行符：`.gitattributes` 强制全仓库 LF —— `cmd/` 脚本带 CRLF 会在飞牛真机上**执行失败**。自查 `git ls-files --eol`。
+- 不入库：`.idea/`、`node_modules/`、`dist/`、`*.fpk`、运行时 `data/`、密钥。
+- ⚠️ 本机禁用 `git rm -r`（曾连带删除 `deploy/` 子树下 7 个未修改文件，详见 `.workbuddy/memory/`）。
 
-远程仓库首次关联（地址填入后执行）：
+## 下一步（对应 `docs/05` §9）
 
-```bash
-git remote add origin <你的 Gitee 仓库地址>
-git push -u origin main
-git push -u origin dev
-```
-
-## 关键设计一句话摘要
-
-- **零外部依赖**：无容器、无外部数据库、无运行时依赖（不引入 `install_dep_apps`），Agent 自带 `smartctl`。
-- **单端口分流**：飞牛 manifest 只声明一个 `service_port`，WebUI、管理 API、Agent 上报、桌面入口共用 18080，按路径分流（`/api/v1/agent/*`）。
-- **数据落 `TRIM_PKGVAR`**：SQLite、TSDB、密钥、日志全在飞牛持久卷里，重装 FPK 不丢数据。
-- **两套存储分工**：会变的关系数据进 SQLite，画曲线的数值进进程内嵌 TSDB；告警判定在内存中做，不用查询语言承担业务逻辑。
-- **进程自管**：`cmd/main` 用 PID 文件 + `TERM→KILL` 管理进程，`status` 严格返回 0/3 语义，启动后做 `/healthz` 就绪探测。
-- **降级诚实**：「日志进飞牛日志中心」「复用飞牛 RBAC 账号」在官方文档中查不到依据，已降级为应用内实现 + 待真机验证。
-
-## 待真机验证清单（未验证前不要对外宣称）
-
-| # | 事项 | 影响 |
-| --- | --- | --- |
-| V1 | `CGO_ENABLED=0` 静态二进制在飞牛 OS 上直接可运行（无 glibc 依赖） | 起不来则整套 native 方案要重估 |
-| V2 | 进程以 `package` 用户运行，能否读写 `TRIM_PKGVAR` 与共享目录 | 权限不足则数据写不进去 |
-| V3 | 卸载「保留数据」→ 重装后资产与曲线是否完整恢复 | 决定是否需要额外备份机制 |
-| V4 | 升级流程中 `stop → 迁移 → start` 的时序与端口释放 | 处理不当会出现「端口占用」或双进程 |
-| V5 | `curl`/`wget` 是否存在（`cmd/main` 就绪探测有降级路径） | 影响启动判定的准确性 |
-| V6 | 飞牛是否允许自定义/改写 `service_port` 并同步桌面入口 | 决定 D3 的「自定义端口」能否开放 |
-| V7 | 4GB 内存机型上单进程常驻实测（目标 ≤250MB） | 决定默认采集频率与保留策略 |
-
-## 下一步建议
-
-1. 先做 `docs/05` §9 的前 5 项：Go 骨架 → SQLite 迁移器 → native `cmd/main` 真机验证（含 V1–V3）；
-2. 协议冻结（`docs/04` §2）后，服务端与 Agent 并行开发；
-3. 打包链路（`build_fpk.sh` + CI 矩阵）在 P1 阶段就跑通，不要留到最后。
+1. `make pb` 打通 Protobuf 编解码，Agent 通道由 JSON 兼容切换为二进制；
+2. W1b 落地内嵌 TSDB（写入队列 + rollup + retention），补齐 `metalwatch_up` 与曲线查询；
+3. W4/W5 采集落地：IPMI 池接入真实 BMC、Linux Agent 采集项补齐（`smartctl` 内置）；
+4. W11 鉴权与审计（当前管理接口**尚未接鉴权**，仅限内网使用）；
+5. 真机验证 V1–V3（静态二进制可运行 / 进程写权限 / 卸载重装数据恢复）——打包链路命门。

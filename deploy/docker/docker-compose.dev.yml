@@ -1,0 +1,99 @@
+# 独立部署的存储后端「开发验证环境」
+#
+# 用途：验证 backend/internal/adapter 下各后端的适配实现（把 app.yaml 的
+#       db.driver / timeseries.driver 指到这里的服务即可）。
+#       这些容器 **不属于** 交付形态 —— 交付给飞牛的 MetalWatch 默认用内置 SQLite +
+#       内嵌时序存储，零外部依赖。
+#
+# 用法：docker compose -f deploy/docker/docker-compose.dev.yml up -d
+name: metalwatch-storage-dev
+
+services:
+  postgres:
+    image: postgres:17-alpine
+    container_name: mw-dev-pg
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: metalwatch
+      POSTGRES_USER: metalwatch
+      POSTGRES_PASSWORD: metalwatch
+      TZ: Asia/Shanghai
+    ports: ["15432:5432"]
+    volumes:
+      - pg-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U metalwatch -d metalwatch"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+
+  mysql:
+    image: mysql:8.4
+    container_name: mw-dev-mysql
+    restart: unless-stopped
+    command:
+      - --character-set-server=utf8mb4
+      - --collation-server=utf8mb4_0900_ai_ci
+      - --innodb-buffer-pool-size=256M
+    environment:
+      MYSQL_DATABASE: metalwatch
+      MYSQL_USER: metalwatch
+      MYSQL_PASSWORD: metalwatch
+      MYSQL_ROOT_PASSWORD: metalwatch-root
+      TZ: Asia/Shanghai
+    ports: ["13306:3306"]
+    volumes:
+      - mysql-data:/var/lib/mysql
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "127.0.0.1"]
+      interval: 10s
+      timeout: 3s
+      retries: 10
+
+  victoriametrics:
+    image: victoriametrics/victoria-metrics:v1.106.1
+    container_name: mw-dev-vm
+    restart: unless-stopped
+    command:
+      - -retentionPeriod=3
+      - -http.pathPrefix=/
+    ports: ["18428:8428"]
+    volumes:
+      - vm-data:/victoria-metrics-data
+
+  prometheus:
+    image: prom/prometheus:v3.1.0
+    container_name: mw-dev-prom
+    restart: unless-stopped
+    command:
+      - --config.file=/etc/prometheus/prometheus.yml
+      - --storage.tsdb.retention.time=7d
+      - --web.enable-remote-write-receiver
+    ports: ["19090:9090"]
+    volumes:
+      - prom-data:/prometheus
+
+  influxdb:
+    image: influxdb:2.7-alpine
+    container_name: mw-dev-influx
+    restart: unless-stopped
+    environment:
+      DOCKER_INFLUXDB_INIT_MODE: setup
+      DOCKER_INFLUXDB_INIT_USERNAME: metalwatch
+      DOCKER_INFLUXDB_INIT_PASSWORD: metalwatch-dev-pw
+      DOCKER_INFLUXDB_INIT_ORG: metalwatch
+      DOCKER_INFLUXDB_INIT_BUCKET: metrics
+      DOCKER_INFLUXDB_INIT_ADMIN_TOKEN: metalwatch-dev-token
+    ports: ["18086:8086"]
+    volumes:
+      - influx-data:/var/lib/influxdb2
+
+  # GBase8s 无公开可自由分发的镜像，需自行提供授权镜像后在本地追加服务定义。
+  # 适配要点见 docs/05 的风险项 R11（方言差异：分页、自增列、时间函数）。
+
+volumes:
+  pg-data:
+  mysql-data:
+  vm-data:
+  prom-data:
+  influx-data:

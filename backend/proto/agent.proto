@@ -1,0 +1,174 @@
+syntax = "proto3";
+
+// MetalWatch Agent ↔ 服务端通信契约（HTTP/2 + TLS + Protobuf 二进制）
+//
+// 传输约定（与 docs/04 §2 一致）：
+//   POST /api/v1/agent/enroll     —— 一次性注册码换令牌
+//   POST /api/v1/agent/report     —— 指标 + 硬件快照上报（Bearer 令牌）
+//   POST /api/v1/agent/heartbeat  —— 轻量心跳
+//   Content-Type: application/x-protobuf；>32KB 必须 gzip
+//
+// 演进规则：字段只增不删、编号永不复用；删除字段用 reserved 标记。
+
+package metalwatch.agent.v1;
+
+option go_package = "gitee.com/zhangyilin_233/metalwatch/proto/gen/agentv1;agentv1";
+
+// ---------- 通用 ----------
+
+message MetricSample {
+  string name = 1;                     // 指标名，必须在服务端白名单内
+  map<string, string> labels = 2;      // 禁止放序列号等高基数值（docs/03 §3）
+  double value = 3;
+  int64  unix_milli = 4;               // 0 表示由服务端补当前时间
+}
+
+message DiskInfo {
+  string device = 1;                   // /dev/sda 或 \\.\PhysicalDrive0
+  string model = 2;
+  string serial = 3;
+  string media_type = 4;               // HDD / SSD / NVMe
+  uint64 capacity_bytes = 5;
+  int32  temp_celsius = 6;
+  string smart_status = 7;             // OK / PreFail / Fail
+  uint64 reallocated_sectors = 8;
+  uint64 power_on_hours = 9;
+  double wear_percent = 10;
+}
+
+message RaidArray {
+  string controller = 1;
+  string array = 2;                    // vd0 / md0
+  string level = 3;                    // RAID0/1/5/6/10
+  string state = 4;                    // Optimal/Degraded/Failed/Rebuilding
+  double rebuild_percent = 5;
+  int32  disks = 6;
+  int32  failed_disks = 7;
+}
+
+message Component {
+  string category = 1;                 // cpu/memory/disk/nic/raid_controller/psu/fan/...
+  string slot = 2;
+  string name = 3;
+  string vendor = 4;
+  string serial = 5;
+  string firmware = 6;
+  uint64 capacity_bytes = 7;
+}
+
+message Inventory {
+  string fingerprint = 1;              // 规范化清单的 SHA-1；与上次相同则无需上报
+  repeated Component components = 2;
+  string bios_version = 3;
+  string mainboard = 4;
+  string bmc_firmware = 5;
+}
+
+// ---------- 注册 ----------
+
+message EnrollRequest {
+  string enroll_code = 1;
+  string hostname = 2;
+  string primary_ip = 3;
+  string smbios_uuid = 4;
+  string os_type = 5;                  // linux / windows
+  string os_version = 6;
+  string agent_version = 7;
+  repeated string collect = 8;         // sensors / smart / raid / net_err
+}
+
+message EnrollResponse {
+  int64  host_id = 1;
+  string agent_token = 2;              // 明文仅此一次返回，Agent 需落盘 0600
+  uint32 report_interval_sec = 3;
+  uint32 asset_interval_sec = 4;
+  string report_url = 5;
+  string server_time = 6;              // RFC3339 UTC
+}
+
+// ---------- 上报 ----------
+
+message HostSnapshot {
+  repeated DiskInfo  disks = 1;
+  repeated RaidArray raid = 2;
+  Inventory inventory = 3;             // 仅在指纹变化时携带
+}
+
+message ReportRequest {
+  string batch_id = 1;                 // 幂等键，重放不重复入库
+  int64  host_id = 2;
+  string mode = 3;                     // agent / ipmi
+  string collected_at = 4;             // RFC3339 UTC，允许回溯 24h（补传窗口）
+  uint64 sequence = 5;
+  repeated MetricSample metrics = 6;
+  HostSnapshot snapshot = 7;
+}
+
+message ReportResponse {
+  uint32 accepted = 1;
+  uint32 rejected = 2;
+  uint32 config_version = 3;           // 与本地不一致时 Agent 重新拉取配置
+  string next_report_at = 4;
+}
+
+// ---------- 心跳与配置 ----------
+
+message HeartbeatRequest {
+  int64  host_id = 1;
+  string agent_version = 2;
+  uint64 uptime_sec = 3;
+  uint32 config_version = 4;
+}
+
+message HeartbeatResponse {
+  bool   ok = 1;
+  uint32 config_version = 2;
+  uint32 report_interval_sec = 3;
+  string server_time = 4;
+}
+
+message SpoolPolicy {
+  uint64 max_age_sec = 1;              // 断网缓存最长保留
+  uint64 max_bytes = 2;
+}
+
+message UpgradeHint {
+  string url = 1;
+  string version = 2;
+  string sha256 = 3;
+}
+
+message AgentConfig {
+  uint32 config_version = 1;
+  uint32 report_interval_sec = 2;
+  uint32 asset_interval_sec = 3;
+  uint32 smart_interval_sec = 4;
+  repeated string collect = 5;
+  SpoolPolicy spool = 6;
+  UpgradeHint upgrade = 7;
+}
+
+// ---------- 采集异常 ----------
+
+message CollectError {
+  string component = 1;                // sensors / smart / raid
+  string device = 2;
+  string code = 3;                     // tool_failed / permission / timeout
+  string message = 4;
+  string occurred_at = 5;
+}
+
+message ErrorReportRequest {
+  int64 host_id = 1;
+  repeated CollectError errors = 2;
+}
+
+// ---------- 服务定义（HTTP/2 上的 gRPC 可选形态） ----------
+
+service AgentService {
+  rpc Enroll(EnrollRequest) returns (EnrollResponse);
+  rpc Report(ReportRequest) returns (ReportResponse);
+  rpc Heartbeat(HeartbeatRequest) returns (HeartbeatResponse);
+  rpc GetConfig(HeartbeatRequest) returns (AgentConfig);
+  rpc ReportErrors(ErrorReportRequest) returns (ReportResponse);
+}
