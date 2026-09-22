@@ -209,6 +209,11 @@ func serve(ctx context.Context, cfg config.Config, db *adapter.Store, applied in
 		log.Warn("告警规则加载失败（可继续启动）", "err", err)
 	}
 
+	// W11：新装环境必须有一个管理员，否则所有管理接口都 401，用户进不去系统
+	if err := service.EnsureFirstAdmin(ctx, db, cfg.Server.DataDir, log); err != nil {
+		return err
+	}
+
 	// Agent 注册服务：JSON 与 gRPC 两条通道共享同一套流程（docs/01 D31 第 1 条）
 	interval := time.Duration(cfg.Collect.SensorInterval) * time.Second
 	assetInterval := time.Duration(cfg.Collect.AssetInterval) * time.Second

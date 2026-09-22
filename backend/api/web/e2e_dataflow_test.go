@@ -64,11 +64,12 @@ func openMigratedStore(t *testing.T, cfg config.Config) *adapter.Store {
 
 // testEnv 是完整链路测试环境：路由 + HTTP/2 测试服务 + 各依赖。
 type testEnv struct {
-	r   *gin.Engine
-	srv *httptest.Server
-	db  *adapter.Store
-	pl  *pipeline.Pipeline
-	hub *ws.Hub
+	r          *gin.Engine
+	srv        *httptest.Server
+	db         *adapter.Store
+	pl         *pipeline.Pipeline
+	hub        *ws.Hub
+	adminToken string // W11 起管理接口需鉴权，端到端用例也要带会话令牌
 }
 
 // newTestEnv 在 router_test 的基础上补齐时序存储 / 管道 / 告警服务 / WS Hub，
@@ -80,6 +81,12 @@ func newTestEnv(t *testing.T) *testEnv {
 	cfg := testConfig(t.TempDir())
 	ctx := context.Background()
 	db := openMigratedStore(t, cfg)
+
+	// W11：会话令牌由主密钥签名，端到端环境也走真实路径
+	masterKey, err := crypto.GenerateMasterKey(filepath.Join(cfg.Server.DataDir, "master.key"))
+	if err != nil {
+		t.Fatalf("生成主密钥失败: %v", err)
+	}
 
 	ts, err := adapter.OpenTimeSeries(adapter.TimeSeriesConfig{
 		Driver: adapter.TSDriverEmbedded, RootDir: cfg.Server.DataDir,
@@ -107,7 +114,8 @@ func newTestEnv(t *testing.T) *testEnv {
 	deps := &app.Deps{
 		Config: cfg, Store: db, TSDB: ts, Pipeline: pl, Alerts: alerts,
 		Hosts: service.NewHostService(db.Hosts(), log), Hub: hub,
-		Log: log, Version: "test", Started: time.Now(),
+		MasterKey: masterKey,
+		Log:       log, Version: "test", Started: time.Now(),
 	}
 	engine := web.NewRouter(deps)
 
@@ -116,7 +124,35 @@ func newTestEnv(t *testing.T) *testEnv {
 	srv.StartTLS()
 	t.Cleanup(srv.Close)
 
-	return &testEnv{r: engine, srv: srv, db: db, pl: pl, hub: hub}
+	return &testEnv{r: engine, srv: srv, db: db, pl: pl, hub: hub,
+		adminToken: loginAsAdmin(t, engine, db)}
+}
+
+// loginAsAdmin 建一个管理员并登录，返回会话令牌（管理接口默认鉴权，W11）。
+func loginAsAdmin(t *testing.T, engine *gin.Engine, db *adapter.Store) string {
+	t.Helper()
+	hash, err := crypto.HashPassword(testAdminPassword)
+	if err != nil {
+		t.Fatalf("生成口令哈希失败: %v", err)
+	}
+	if _, err := db.Users().Create(context.Background(), &adapter.AppUser{
+		Username: testAdminUser, PasswordHash: hash, Role: "admin", State: "active",
+	}); err != nil {
+		t.Fatalf("创建测试管理员失败: %v", err)
+	}
+	w := doJSON(t, engine, http.MethodPost, "/api/v1/auth/login", "", map[string]any{
+		"username": testAdminUser, "password": testAdminPassword,
+	})
+	if w.Code != http.StatusOK {
+		t.Fatalf("测试管理员登录失败: %d body=%s", w.Code, w.Body.String())
+	}
+	var lr struct {
+		Token string `json:"token"`
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &lr); err != nil || lr.Token == "" {
+		t.Fatalf("解析登录响应失败: %v body=%s", err, w.Body.String())
+	}
+	return lr.Token
 }
 
 // TestDataFlowEnrollReportQuery 是 G2 门禁的进程内端到端用例：
@@ -191,7 +227,7 @@ func TestDataFlowEnrollReportQuery(t *testing.T) {
 	metrics := doJSON(t, r, http.MethodGet,
 		"/api/v1/hosts/"+strconv.FormatInt(en.HostID, 10)+
 			"/metrics?metric=cpu_temp_celsius&from="+now.Add(-time.Hour).Format(time.RFC3339)+
-			"&to="+now.Add(time.Minute).Format(time.RFC3339)+"&step=60s", "", nil)
+			"&to="+now.Add(time.Minute).Format(time.RFC3339)+"&step=60s", env.adminToken, nil)
 	if metrics.Code != http.StatusOK {
 		t.Fatalf("曲线查询应 200，实际 %d body=%s", metrics.Code, metrics.Body.String())
 	}
@@ -210,7 +246,7 @@ func TestDataFlowEnrollReportQuery(t *testing.T) {
 	}
 
 	// 5. 告警事件：cpu_temp 90 持续 3 分钟 → critical firing
-	alertsResp := doJSON(t, r, http.MethodGet, "/api/v1/alerts?state=active", "", nil)
+	alertsResp := doJSON(t, r, http.MethodGet, "/api/v1/alerts?state=active", env.adminToken, nil)
 	if alertsResp.Code != http.StatusOK {
 		t.Fatalf("告警查询应 200，实际 %d", alertsResp.Code)
 	}
@@ -231,11 +267,11 @@ func TestDataFlowEnrollReportQuery(t *testing.T) {
 
 	// 6. 确认 → state 变 acked
 	ack := doJSON(t, r, http.MethodPost,
-		"/api/v1/alerts/"+strconv.FormatInt(alertList[0].ID, 10)+"/ack", "", nil)
+		"/api/v1/alerts/"+strconv.FormatInt(alertList[0].ID, 10)+"/ack", env.adminToken, nil)
 	if ack.Code != http.StatusOK {
 		t.Fatalf("确认应 200，实际 %d body=%s", ack.Code, ack.Body.String())
 	}
-	afterAck := doJSON(t, r, http.MethodGet, "/api/v1/alerts?state=acked", "", nil)
+	afterAck := doJSON(t, r, http.MethodGet, "/api/v1/alerts?state=acked", env.adminToken, nil)
 	var acked []struct {
 		State string `json:"state"`
 	}
@@ -245,7 +281,7 @@ func TestDataFlowEnrollReportQuery(t *testing.T) {
 	}
 
 	// 7. 大盘：在线 1 台、活跃告警 1 条（acked 仍是 firing）、趋势有序列
-	ov := doJSON(t, r, http.MethodGet, "/api/v1/overview", "", nil)
+	ov := doJSON(t, r, http.MethodGet, "/api/v1/overview", env.adminToken, nil)
 	if ov.Code != http.StatusOK {
 		t.Fatalf("大盘应 200，实际 %d body=%s", ov.Code, ov.Body.String())
 	}
@@ -279,7 +315,7 @@ func TestDataFlowEnrollReportQuery(t *testing.T) {
 	}
 
 	// 8. 阈值模板（前端只读表格）
-	tpl := doJSON(t, r, http.MethodGet, "/api/v1/alerts/templates", "", nil)
+	tpl := doJSON(t, r, http.MethodGet, "/api/v1/alerts/templates", env.adminToken, nil)
 	if tpl.Code != http.StatusOK {
 		t.Fatalf("模板查询应 200，实际 %d", tpl.Code)
 	}
@@ -316,7 +352,7 @@ func TestWebSocketAlertPush(t *testing.T) {
 	_ = json.Unmarshal(enroll.Body.Bytes(), &en)
 
 	// 2. WS 订阅（wss，自签跳过校验）
-	wsURL := "wss://" + ts.Listener.Addr().String() + "/api/v1/ws/alerts"
+	wsURL := "wss://" + ts.Listener.Addr().String() + "/api/v1/ws/alerts?token=" + env.adminToken
 	dialer := websocket.Dialer{TLSClientConfig: &tls.Config{InsecureSkipVerify: true}}
 	conn, _, err := dialer.Dial(wsURL, nil)
 	if err != nil {

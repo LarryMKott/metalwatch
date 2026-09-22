@@ -25,7 +25,7 @@ import (
 	"github.com/LarryMKott/metalwatch/pkg/crypto"
 )
 
-func newTestServer(t *testing.T) (*gin.Engine, *adapter.Store) {
+func newTestServer(t *testing.T) (*gin.Engine, *adapter.Store, string) {
 	t.Helper()
 	gin.SetMode(gin.TestMode)
 
@@ -48,17 +48,57 @@ func newTestServer(t *testing.T) (*gin.Engine, *adapter.Store) {
 		t.Fatalf("迁移失败: %v", err)
 	}
 
+	// 会话令牌靠主密钥签名，测试也走真实路径生成（W11）
+	masterKey, err := crypto.GenerateMasterKey(filepath.Join(cfg.Server.DataDir, "master.key"))
+	if err != nil {
+		t.Fatalf("生成主密钥失败: %v", err)
+	}
+
 	log := slog.New(slog.NewTextHandler(io.Discard, nil))
 	deps := &app.Deps{
-		Config:  cfg,
+		Config: cfg, MasterKey: masterKey,
 		Store:   db,
 		Hosts:   service.NewHostService(db.Hosts(), log),
 		Log:     log,
 		Version: "test",
 		Started: time.Now(),
 	}
-	return web.NewRouter(deps), db
+	router := web.NewRouter(deps)
+
+	// 管理接口默认鉴权（W11），测试也要先登录再用令牌访问
+	hash, err := crypto.HashPassword(testAdminPassword)
+	if err != nil {
+		t.Fatalf("生成口令哈希失败: %v", err)
+	}
+	if _, err := db.Users().Create(ctx, &adapter.AppUser{
+		Username: testAdminUser, DisplayName: "测试管理员",
+		PasswordHash: hash, Role: "admin", State: "active",
+	}); err != nil {
+		t.Fatalf("创建测试管理员失败: %v", err)
+	}
+	w := doJSON(t, router, http.MethodPost, "/api/v1/auth/login", "", map[string]any{
+		"username": testAdminUser, "password": testAdminPassword,
+	})
+	if w.Code != http.StatusOK {
+		t.Fatalf("测试管理员登录失败: %d body=%s", w.Code, w.Body.String())
+	}
+	var lr struct {
+		Token string `json:"token"`
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &lr); err != nil {
+		t.Fatalf("解析登录响应失败: %v", err)
+	}
+	if lr.Token == "" {
+		t.Fatal("登录响应缺少令牌")
+	}
+	return router, db, lr.Token
 }
+
+// 测试管理员凭据（仅用于测试库，生产库的初始账号由 service.EnsureFirstAdmin 随机生成）
+const (
+	testAdminUser     = "testadmin"
+	testAdminPassword = "test-pass-12345"
+)
 
 func doJSON(t *testing.T, r *gin.Engine, method, path, token string, body any) *httptest.ResponseRecorder {
 	t.Helper()
@@ -81,7 +121,7 @@ func doJSON(t *testing.T, r *gin.Engine, method, path, token string, body any) *
 }
 
 func TestHealthz(t *testing.T) {
-	r, _ := newTestServer(t)
+	r, _, _ := newTestServer(t)
 	w := doJSON(t, r, http.MethodGet, "/healthz", "", nil)
 
 	if w.Code != http.StatusOK {
@@ -102,10 +142,10 @@ func TestHealthz(t *testing.T) {
 }
 
 func TestHostLifecycleOverAPI(t *testing.T) {
-	r, _ := newTestServer(t)
+	r, _, adminToken := newTestServer(t)
 
 	// 非法输入：主机名带非法字符
-	bad := doJSON(t, r, http.MethodPost, "/api/v1/hosts", "", map[string]any{
+	bad := doJSON(t, r, http.MethodPost, "/api/v1/hosts", adminToken, map[string]any{
 		"hostname": "bad host!", "primary_ip": "10.0.0.1",
 	})
 	if bad.Code != http.StatusUnprocessableEntity {
@@ -113,7 +153,7 @@ func TestHostLifecycleOverAPI(t *testing.T) {
 	}
 
 	// 非法 IP
-	badIP := doJSON(t, r, http.MethodPost, "/api/v1/hosts", "", map[string]any{
+	badIP := doJSON(t, r, http.MethodPost, "/api/v1/hosts", adminToken, map[string]any{
 		"hostname": "node-1", "primary_ip": "not-an-ip",
 	})
 	if badIP.Code != http.StatusUnprocessableEntity {
@@ -121,7 +161,7 @@ func TestHostLifecycleOverAPI(t *testing.T) {
 	}
 
 	// 正常创建
-	created := doJSON(t, r, http.MethodPost, "/api/v1/hosts", "", map[string]any{
+	created := doJSON(t, r, http.MethodPost, "/api/v1/hosts", adminToken, map[string]any{
 		"hostname": "node-1", "primary_ip": "10.0.0.1",
 		"bmc_ip": "10.0.0.201", "os_type": "linux", "collect_ipmi": true,
 	})
@@ -146,7 +186,7 @@ func TestHostLifecycleOverAPI(t *testing.T) {
 	}
 
 	// 列表 + 分页字段
-	list := doJSON(t, r, http.MethodGet, "/api/v1/hosts?q=node-1&page=1&page_size=10", "", nil)
+	list := doJSON(t, r, http.MethodGet, "/api/v1/hosts?q=node-1&page=1&page_size=10", adminToken, nil)
 	if list.Code != http.StatusOK {
 		t.Fatalf("列表应 200，实际 %d", list.Code)
 	}
@@ -164,30 +204,30 @@ func TestHostLifecycleOverAPI(t *testing.T) {
 	}
 
 	// 详情
-	got := doJSON(t, r, http.MethodGet, "/api/v1/hosts/"+strconv.FormatInt(h.ID, 10), "", nil)
+	got := doJSON(t, r, http.MethodGet, "/api/v1/hosts/"+strconv.FormatInt(h.ID, 10), adminToken, nil)
 	if got.Code != http.StatusOK {
 		t.Fatalf("详情应 200，实际 %d", got.Code)
 	}
 
 	// 不存在的 ID
-	missing := doJSON(t, r, http.MethodGet, "/api/v1/hosts/999999", "", nil)
+	missing := doJSON(t, r, http.MethodGet, "/api/v1/hosts/999999", adminToken, nil)
 	if missing.Code != http.StatusNotFound {
 		t.Fatalf("不存在的主机应 404，实际 %d", missing.Code)
 	}
 
 	// 删除
-	del := doJSON(t, r, http.MethodDelete, "/api/v1/hosts/"+strconv.FormatInt(h.ID, 10), "", nil)
+	del := doJSON(t, r, http.MethodDelete, "/api/v1/hosts/"+strconv.FormatInt(h.ID, 10), adminToken, nil)
 	if del.Code != http.StatusNoContent {
 		t.Fatalf("删除应 204，实际 %d", del.Code)
 	}
-	again := doJSON(t, r, http.MethodDelete, "/api/v1/hosts/"+strconv.FormatInt(h.ID, 10), "", nil)
+	again := doJSON(t, r, http.MethodDelete, "/api/v1/hosts/"+strconv.FormatInt(h.ID, 10), adminToken, nil)
 	if again.Code != http.StatusNotFound {
 		t.Fatalf("重复删除应 404，实际 %d", again.Code)
 	}
 }
 
 func TestAgentEnrollReportHeartbeat(t *testing.T) {
-	r, db := newTestServer(t)
+	r, db, adminToken := newTestServer(t)
 	ctx := context.Background()
 
 	enrollBody := map[string]any{
@@ -197,7 +237,7 @@ func TestAgentEnrollReportHeartbeat(t *testing.T) {
 	}
 
 	// 未签发的注册码 → 401
-	denied := doJSON(t, r, http.MethodPost, "/api/v1/agent/enroll", "", enrollBody)
+	denied := doJSON(t, r, http.MethodPost, "/api/v1/agent/enroll", adminToken, enrollBody)
 	if denied.Code != http.StatusUnauthorized {
 		t.Fatalf("无效注册码应 401，实际 %d body=%s", denied.Code, denied.Body.String())
 	}
@@ -260,7 +300,7 @@ func TestAgentEnrollReportHeartbeat(t *testing.T) {
 	}
 
 	// 上报后主机应变为 online
-	hosts := doJSON(t, r, http.MethodGet, "/api/v1/hosts/"+strconv.FormatInt(en.HostID, 10), "", nil)
+	hosts := doJSON(t, r, http.MethodGet, "/api/v1/hosts/"+strconv.FormatInt(en.HostID, 10), adminToken, nil)
 	var host struct {
 		Status     string `json:"status"`
 		LastSeenAt string `json:"last_seen_at"`
@@ -325,8 +365,8 @@ func TestAgentEnrollReportHeartbeat(t *testing.T) {
 }
 
 func TestStorageBackendsEndpoint(t *testing.T) {
-	r, _ := newTestServer(t)
-	w := doJSON(t, r, http.MethodGet, "/api/v1/system/storage/backends", "", nil)
+	r, _, adminToken := newTestServer(t)
+	w := doJSON(t, r, http.MethodGet, "/api/v1/system/storage/backends", adminToken, nil)
 	if w.Code != http.StatusOK {
 		t.Fatalf("应 200，实际 %d", w.Code)
 	}

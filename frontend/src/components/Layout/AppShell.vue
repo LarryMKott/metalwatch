@@ -3,12 +3,14 @@ import { computed, onMounted, onUnmounted, ref } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { Message } from '@arco-design/web-vue'
 import { useAppStore } from '@/store'
+import { useAuthStore } from '@/store/auth'
 import { fromNow } from '@/utils/format'
 import { AlertSocket, type AlertEvent } from '@/utils/websocket'
 
 // 应用外壳：左侧导航 + 顶部状态 + 内容区。
 // 顶部状态直接反映后端 /system/status，便于在飞牛应用面板之外自查。
 const store = useAppStore()
+const auth = useAuthStore()
 const route = useRoute()
 const router = useRouter()
 const collapsed = ref(false)
@@ -40,6 +42,13 @@ function onAlertEvent(evt: AlertEvent) {
 
 function onMenuClick(key: string) {
   if (key !== route.path) router.push(key)
+}
+
+// 退出登录：清本地令牌后回登录页（后端是无状态令牌，不维护会话表）
+async function onUserMenu(value: string | number | Record<string, unknown> | undefined) {
+  if (value !== 'logout') return
+  await auth.logout()
+  await router.replace('/login')
 }
 
 async function refresh() {
@@ -104,6 +113,17 @@ onUnmounted(() => {
           <span v-if="store.lastError" class="err dim">{{ store.lastError }}</span>
           <span class="dim">更新于 {{ fromNow(store.status?.server_time) }}</span>
           <a-button size="mini" type="outline" @click="refresh">刷新</a-button>
+          <!-- W11：当前登录主体与登出 -->
+          <a-dropdown @select="onUserMenu">
+            <span class="user dim">
+              {{ auth.username || '未登录' }}
+              <a-tag v-if="auth.me" size="small">{{ auth.me.role }}</a-tag>
+              <icon-down />
+            </span>
+            <template #content>
+              <a-doption value="logout">退出登录</a-doption>
+            </template>
+          </a-dropdown>
         </div>
       </a-layout-header>
 

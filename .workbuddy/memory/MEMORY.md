@@ -99,6 +99,19 @@ Adapter 层实现全部存储（业务对后端零感知）。`internal/app` 是
 - **平台文件只放平台实现**：把共用函数写进带 `//go:build linux` 的文件会导致 Windows 构建 `undefined`。
 - **重构后立刻 `go build ./...`**：漏改 `package` 声明只会在此暴露。
 
+## W11 鉴权与审计（2026-09-22 落地，改动前先读）
+
+- **管理接口 `/api/v1/*` 一律鉴权**（中间件 `api/web/auth.go`，无条件挂载 —— 不要加
+  "没主密钥就跳过" 的兜底，那等于静默裸奔）。Agent 通道 `/api/v1/agent/*` 走自己的 Bearer 校验。
+- **主体定义放 `internal/authz`**：`api/web` 与 `api/web/handler` 都要读主体，而 web 已 import
+  handler，三者不能互引 → 该包存在的唯一理由就是切断这个环，别把 Subject 塞回 web 包。
+- **权限判定在中间件**：写操作（非 GET）需 operator+；高危路径（用户 / Token / BMC 凭据 /
+  主机增删 / 明文导出）需 admin，按 `method + 路由模板` 精确匹配 `adminOnly` 表。
+  ⚠️ **新增高危接口必须手动加进 `adminOnly`**，否则默认是"operator 可写"。
+- 会话令牌是**无状态**自签 HMAC（密钥取 master.key，12h）：登出=客户端丢弃，无黑名单表。
+- **新表注意 `created_at`**：迁移 DDL **不带 DEFAULT**（跨方言约定），INSERT 必须显式写
+  UTC RFC3339 —— 本轮三张表全踩过一次 NOT NULL 失败。
+
 ## 全量重设计后的架构定案（2026-09-22）
 
 - **Agent 通道 = gRPC 双向流**（`AgentStreamService.Stream/Enroll`），不再是 HTTP/2 + Protobuf 单向上报。

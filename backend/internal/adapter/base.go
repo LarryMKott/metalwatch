@@ -30,6 +30,10 @@ type MetadataStore interface {
 	Components() *ComponentRepo
 	Assets() *AssetRepo
 	NotifyChannels() *NotifyChannelRepo
+
+	Users() *UserRepo
+	APITokens() *APITokenRepo
+	AuditLogs() *AuditRepo
 }
 
 // 编译期断言：SQLite 后端满足接口契约。

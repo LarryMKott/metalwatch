@@ -23,6 +23,17 @@ func NewRouter(d *app.Deps) *gin.Engine {
 
 	v1 := r.Group("/api/v1")
 
+	// W11 鉴权：挂在 /api/v1 组上，覆盖全部管理接口
+	// （Agent 通道 /api/v1/agent/* 由 agentpb 自己的 Bearer 校验负责，不经过这里）
+	//
+	// 这里**不做**「没传主密钥就跳过鉴权」的兜底：主密钥缺失时会话本来也签不出来，
+	// 与其静默放行造成裸奔，不如让登录直接失败暴露配置问题。
+	v1.Use(Auth(AuthConfig{
+		MasterKey: d.MasterKey,
+		Store:     d.Store,
+		Log:       d.Log,
+	}))
+
 	// 各路由域各自持有自己的路由表：构造注入依赖 → Register 挂路由
 	handler.NewSystemHandler(d.Store, d.TSDB, d.Pool, d.Config, d.Version, d.Started).
 		Register(r, v1)
@@ -31,6 +42,11 @@ func NewRouter(d *app.Deps) *gin.Engine {
 	handler.NewAlertHandler(d.Store).Register(v1)
 	handler.NewBMCHandler(d.Store, d.MasterKey, d.Pool, d.IPMI, d.Log).Register(v1)
 	handler.NewAssetHandler(d.Store).Register(v1)
+
+	// W11：鉴权 / 开放令牌 / 审计
+	handler.NewAuthHandler(d.Store, d.MasterKey, 0).Register(v1)
+	handler.NewTokenHandler(d.Store).Register(v1)
+	handler.NewAuditHandler(d.Store).Register(v1)
 
 	// WebSocket 实时推送（W7）：/api/v1/ws/alerts
 	if d.Hub != nil {

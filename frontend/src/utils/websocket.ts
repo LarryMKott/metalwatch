@@ -3,6 +3,8 @@
 // 说明：后端 WS 端点由 W7 告警工作流交付；本模块先固定契约与重连策略，
 // 未连通时调用方应回退到轮询 GET /api/v1/alerts。
 
+import { getToken } from '@/utils/request'
+
 export type AlertEvent = {
   event: 'alert.firing' | 'alert.resolved' | 'alert.suppressed' | 'agent.offline' | 'agent.online' | 'change.detected'
   severity?: 'critical' | 'major' | 'info'
@@ -25,7 +27,9 @@ export class AlertSocket {
     this.closedByUser = false
     const scheme = location.protocol === 'https:' ? 'wss' : 'ws'
     const path = import.meta.env.VITE_WS_PATH ?? '/api/v1/ws/alerts'
-    const url = `${scheme}://${location.host}${path}`
+    // WebSocket 握手发不出自定义头，令牌只能走 query（服务端鉴权中间件已支持）
+    const token = getToken()
+    const url = `${scheme}://${location.host}${path}${token ? `?token=${encodeURIComponent(token)}` : ''}`
 
     try {
       this.ws = new WebSocket(url)

@@ -73,6 +73,13 @@ func Unauthorized(c *gin.Context, code, msg string) {
 	})
 }
 
+// Forbidden 输出 403（身份有效但权限不足：角色不够或 token scope 不足）。
+func Forbidden(c *gin.Context, code, msg string) {
+	c.AbortWithStatusJSON(http.StatusForbidden, ErrorBody{
+		Code: code, Message: msg, RequestID: RequestIDOf(c),
+	})
+}
+
 // BadJSON 输出 422（请求体不是合法 JSON）。
 func BadJSON(c *gin.Context, err error) {
 	c.AbortWithStatusJSON(http.StatusUnprocessableEntity, ErrorBody{

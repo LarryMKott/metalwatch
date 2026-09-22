@@ -104,7 +104,7 @@ type Alert struct {
 // Default 返回一套可直接运行的默认配置。
 func Default() Config {
 	return Config{
-		Server: Server{Port: 18080, Timezone: "Asia/Shanghai", LogLevel: "info"},
+		Server: Server{Port: 18080, Timezone: "Asia/Shanghai", LogLevel: "info", DataDir: "./data"},
 		DB: DB{
 			Driver:       DriverSQLite,
 			MaxOpenConns: 1,
