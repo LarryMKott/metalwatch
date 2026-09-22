@@ -56,6 +56,43 @@ func TestValidateRejectsBadValues(t *testing.T) {
 	}
 }
 
+// TestTimezoneValidation 覆盖时区校验（W12 真机前实测发现的启动阻断项）。
+//
+// 背景：二进制以 -trimpath 构建时，time.LoadLocation 无法回退到
+// $GOROOT/lib/time/zoneinfo.zip；若宿主机也没有 /usr/share/zoneinfo，
+// 默认时区 Asia/Shanghai 会被判为无效并阻断启动。修复方式是本包空导入
+// time/tzdata。真正能复现该场景的是「构建产物实跑」，见
+// deploy/tools/smoke_server.py（它会拉起真实进程探测 /healthz）。
+func TestTimezoneValidation(t *testing.T) {
+	cfg := Default()
+	if cfg.Server.Timezone != "Asia/Shanghai" {
+		t.Fatalf("默认时区应为 Asia/Shanghai，实际 %q", cfg.Server.Timezone)
+	}
+	if err := cfg.Validate(); err != nil {
+		t.Fatalf("默认时区应通过校验（tzdata 已内置）: %v", err)
+	}
+
+	// 常见 IANA 时区都应可解析，不依赖宿主机环境。
+	for _, tz := range []string{"UTC", "Asia/Shanghai", "Asia/Tokyo", "America/New_York", "Europe/London"} {
+		cfg := Default()
+		cfg.Server.Timezone = tz
+		if err := cfg.Validate(); err != nil {
+			t.Fatalf("时区 %s 应通过校验: %v", tz, err)
+		}
+	}
+
+	// 写错的时区名必须阻断启动，避免静默落到 UTC 造成时间口径偏差。
+	cfg = Default()
+	cfg.Server.Timezone = "Asia/ShangHaii"
+	err := cfg.Validate()
+	if err == nil {
+		t.Fatal("非法时区名应校验失败")
+	}
+	if !strings.Contains(err.Error(), "server.timezone") {
+		t.Fatalf("错误信息应指向 server.timezone，实际: %v", err)
+	}
+}
+
 func TestPostgresWithDSNIsValid(t *testing.T) {
 	cfg := Default()
 	cfg.DB.Driver = DriverPostgres

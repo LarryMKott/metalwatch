@@ -3,6 +3,10 @@
 #
 # 流程：前端构建 → Go 静态编译 → 落 app/server → 校验骨架 → fnpack 打包
 # 用法：bash deploy/script/build.sh [版本号]
+#
+# 注意：本脚本依赖 dirname / node / npm / sed。若所在环境的 PATH 损坏
+# （例如 Git Bash 报 `dirname: command not found`、npm 报 `'bash': No such file`），
+# 请改用等价的 Python 版：python deploy/script/build_fpk.py [版本号]
 set -euo pipefail
 
 VERSION="${1:-0.1.0}"

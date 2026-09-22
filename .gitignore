@@ -10,6 +10,9 @@ build/
 dist/
 deploy/build/
 deploy/fpk/*/target/
+# 服务端静态二进制（由 deploy/script/build_fpk.py 生成，30MB 级，不入库）
+deploy/fpk/*/app/server/metalwatch
+deploy/fpk/*/app/server/metalwatch.exe
 
 # Go
 backend/bin/

@@ -14,6 +14,14 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	// 内置 IANA 时区数据库（约 450KB）。
+	//
+	// 原因：Validate 用 time.LoadLocation 校验 server.timezone。该函数默认只查宿主机的
+	// /usr/share/zoneinfo 与 $GOROOT/lib/time/zoneinfo.zip——FPK 跑在飞牛精简系统上，
+	// 前者不一定存在；而我们以 `-trimpath` 构建，后者也不可用。结果就是
+	// "Asia/Shanghai" 解析失败并被判为致命配置错误，应用启动即退出。
+	// 空导入 tzdata 后时区数据与二进制一起分发，不再依赖宿主机环境。
+	_ "time/tzdata"
 
 	"gopkg.in/yaml.v3"
 )
@@ -206,9 +214,10 @@ func (c Config) Validate() error {
 		errs = append(errs, "server.log_level 只能是 debug/info/warn/error（当前 "+c.Server.LogLevel+"）")
 	}
 	if c.Server.Timezone != "" {
+		// 二进制已内置 tzdata（cmd/server 空导入 time/tzdata），不依赖宿主机的
+		// /usr/share/zoneinfo，因此这里解析失败只可能是时区名写错——属于配置错误，阻断启动。
 		if _, err := time.LoadLocation(c.Server.Timezone); err != nil {
-			// 容器/精简系统可能缺 tzdata，仅提示不阻断
-			errs = append(errs, "server.timezone 无效: "+c.Server.Timezone)
+			errs = append(errs, "server.timezone 无效: "+c.Server.Timezone+"（应为 IANA 时区名，如 Asia/Shanghai）")
 		}
 	}
 
