@@ -90,6 +90,12 @@ Adapter 层实现全部存储（业务对后端零感知）。`internal/app` 是
 - **npm 会写出手字面量 `%SystemDrive%` 目录**（受限环境所致）→ 已加入 `.gitignore`，出现即清理。
 - **Vite 8 默认 rolldown，`manualChunks` 只接受函数**：对象写法两个 Node 版本同时构建失败。
 - **`-race` 需 CGO/gcc**：本机无 gcc 跑不了 → 必须进 CI。
+- **验证必须 `go test -count=1`**：默认会命中缓存，`ok ... (cached)` 会掩盖真实失败。
+  2026-09-22 提交子代理产出时，全量 test 首轮显示全绿（多数 cached），`-count=1`
+  才暴露出 `internal/notify` 编译失败与 `service/inventory` 逻辑缺陷。
+- **多包并发跑测试的偶发假失败**：Windows 上偶发 `TempDir RemoveAll cleanup: unlinkat ...
+  directory is not empty`（多个包同时建/删临时目录）。不是业务缺陷——单独重复跑验证；
+  Linux CI 不会出现（可 unlink 已打开的文件）。
 - **平台文件只放平台实现**：把共用函数写进带 `//go:build linux` 的文件会导致 Windows 构建 `undefined`。
 - **重构后立刻 `go build ./...`**：漏改 `package` 声明只会在此暴露。
 
