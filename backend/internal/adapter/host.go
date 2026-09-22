@@ -104,8 +104,10 @@ type ListFilter struct {
 	// Keyword 模糊匹配 hostname / primary_ip / sn
 	Keyword string
 	Status  string
-	Limit   int
-	Offset  int
+	// IPMIOnly 为 true 时只返回启用了带外采集且有 BMC 地址的主机
+	IPMIOnly bool
+	Limit    int
+	Offset   int
 }
 
 // List 返回主机列表与总数。
@@ -188,6 +190,9 @@ func buildHostWhere(s *Store, f ListFilter) (string, []any) {
 	if st := strings.TrimSpace(f.Status); st != "" {
 		conds = append(conds, "status = ?")
 		args = append(args, st)
+	}
+	if f.IPMIOnly {
+		conds = append(conds, "collect_ipmi = 1 AND bmc_ip IS NOT NULL")
 	}
 	if len(conds) == 0 {
 		return "", nil
@@ -301,4 +306,30 @@ func parseTimePtr(v sql.NullString) *time.Time {
 		return nil
 	}
 	return &t
+}
+
+// SetBMC 更新主机的带外信息：bmc_ip 与是否启用带外采集。
+// 供 BMC 凭据管理接口调用；启用前必须已有合法 bmc_ip。
+func (r *HostRepo) SetBMC(ctx context.Context, id int64, bmcIP string, collectIPMI bool, at time.Time) error {
+	ip := func() *string {
+		if bmcIP == "" {
+			return nil
+		}
+		return &bmcIP
+	}()
+	flag := 0
+	if collectIPMI {
+		flag = 1
+	}
+	res, err := r.s.ExecContext(ctx, r.s.Rebind(
+		`UPDATE host SET bmc_ip = ?, collect_ipmi = ?, updated_at = ? WHERE id = ?`),
+		ip, flag, formatTime(at), id)
+	if err != nil {
+		return err
+	}
+	n, _ := res.RowsAffected()
+	if n == 0 {
+		return ErrNotFound
+	}
+	return nil
 }

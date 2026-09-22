@@ -14,25 +14,34 @@ import (
 	"context"
 	"errors"
 	"flag"
-	"log/slog"
 	"fmt"
+	"log/slog"
 	"net"
 	"net/http"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"syscall"
 	"time"
 
 	"github.com/gin-gonic/gin"
+	"golang.org/x/net/http2"
+	"golang.org/x/net/http2/h2c"
 
+	"github.com/LarryMKott/metalwatch/api/agent"
 	"github.com/LarryMKott/metalwatch/api/web"
 	"github.com/LarryMKott/metalwatch/internal/adapter"
 	_ "github.com/LarryMKott/metalwatch/internal/adapter/sqlite" // 默认元数据后端
+	_ "github.com/LarryMKott/metalwatch/internal/adapter/tsdb"   // 默认时序后端（W1c）
 	"github.com/LarryMKott/metalwatch/internal/app"
+	"github.com/LarryMKott/metalwatch/internal/engine"
+	"github.com/LarryMKott/metalwatch/internal/notify"
+	"github.com/LarryMKott/metalwatch/internal/pipeline"
 	"github.com/LarryMKott/metalwatch/internal/service"
 	"github.com/LarryMKott/metalwatch/internal/task"
+	"github.com/LarryMKott/metalwatch/internal/ws"
 	"github.com/LarryMKott/metalwatch/migrations"
 	"github.com/LarryMKott/metalwatch/pkg/config"
 	"github.com/LarryMKott/metalwatch/pkg/crypto"
@@ -149,8 +158,8 @@ func issueAgentCode(ctx context.Context, db *adapter.Store, days, uses int, log 
 	}
 	log.Info("注册码已签发", "expire_at", expireAt.Format(time.RFC3339), "max_uses", uses)
 	fmt.Printf("\n注册码: %s\n有效期至: %s\n可用次数: %d\n\n", raw, expireAt.Format(time.RFC3339), uses)
-	fmt.Println("请在 Agent 端以该注册码执行 enroll（详见 docs/04 §2.1）：")
-	fmt.Println("  metalwatch-agent enroll --server https://<server>:18080 --code <注册码>")
+	fmt.Println("请在 Agent 端用该注册码完成注册（详见 docs/04 §2.1）：")
+	fmt.Println("  metalwatch-agent --server http://<server>:18080 --code <注册码> --spool <缓存目录>")
 	return nil
 }
 
@@ -172,14 +181,86 @@ func serve(ctx context.Context, cfg config.Config, db *adapter.Store, applied in
 		Logger:         log,
 	})
 
+	// 时序存储（W1c，docs/01 D25：SQLite 分块压缩自研实现，零新依赖）。
+	ts, err := adapter.OpenTimeSeries(adapter.TimeSeriesConfig{
+		Driver:  cfg.Timeseries.Driver,
+		RootDir: cfg.Server.DataDir,
+		RawDays: cfg.Retention.RawDays, AggDays: cfg.Retention.AggDays,
+	})
+	if err != nil {
+		return fmt.Errorf("打开时序存储失败: %w", err)
+	}
+	defer func() { _ = ts.Close() }()
+
+	pl := pipeline.New(ts, log, pipeline.Options{})
+	defer pl.Stop()
+
+	// 实时推送（W7）：WebSocket Hub 挂到 /ws/alerts；出站 Webhook 按 notify_channel 配置分发
+	hub := ws.NewHub(log)
+	notifier := notify.New(db.NotifyChannels(), db.Alerts(), log)
+
+	// 告警服务（W7）：种子内置阈值 → 加载规则；规则刷新由维护循环兜底
+	alerts := service.NewAlertService(db, db.Thresholds(), db.Alerts(),
+		service.AlertDeps{Notifier: notifier, Broadcaster: hub}, log)
+	if err := alerts.SeedBuiltinTemplates(ctx); err != nil {
+		log.Warn("内置阈值模板写入失败（可继续启动）", "err", err)
+	}
+	if err := alerts.ReloadRules(ctx); err != nil {
+		log.Warn("告警规则加载失败（可继续启动）", "err", err)
+	}
+
+	// Agent 注册服务：JSON 与 gRPC 两条通道共享同一套流程（docs/01 D31 第 1 条）
+	interval := time.Duration(cfg.Collect.SensorInterval) * time.Second
+	assetInterval := time.Duration(cfg.Collect.AssetInterval) * time.Second
+	enroll := service.NewEnrollService(db, hosts, interval, assetInterval, log)
+	inventory := service.NewInventoryService(db, alerts, log)
+
+	// 带外采集（W4）：凭据加密主密钥 → 调度引擎 + 任务池 → IPMI 轮询器
+	masterKey, err := loadMasterKey(cfg.Server.DataDir, log)
+	if err != nil {
+		return err
+	}
+	sched := engine.NewScheduleEngine(engine.ScheduleConfig{
+		SensorInterval: interval, AssetInterval: assetInterval, Pool: pool,
+	})
+	poller := service.NewIPMIPoller(db, pool, sched, pl, alerts, masterKey, interval, nil, log)
+	if err := poller.SyncTargets(ctx); err != nil {
+		log.Warn("带外采集目标同步失败（可继续启动）", "err", err)
+	}
+	go sched.Run(ctx)
+	defer sched.Stop()
+
 	deps := &app.Deps{
-		Config: cfg, Store: db, Hosts: hosts, Pool: pool,
+		Config: cfg, MasterKey: masterKey,
+		Store: db, TSDB: ts, Pipeline: pl, Alerts: alerts,
+		Hosts: hosts, Pool: pool, Hub: hub, IPMI: poller, Inventory: inventory,
 		Log: log, Version: version, Started: time.Now(),
 	}
 
+	// gRPC 通道（W3）与 REST 共用单端口，按协议分流（docs/01 D22）
+	grpcSrv := agent.NewGrpcServer(agent.NewStreamServer(
+		db, enroll, inventory, ts, pl, alerts, interval, assetInterval, log))
+
+	// 离线判定（W7/M3）：超 2×采集周期未上报 → offline + up=0 + agent_offline 告警
+	offline := service.NewOfflineMonitor(db, pl, alerts,
+		2*interval, 15*time.Second, log)
+	go offline.Run(ctx)
+
+	// 维护循环：5m 一轮 TSDB rollup/清理 + collect_run 7 天保留期（docs/03 §1.5/§2.4）
+	stopMaint := startMaintenance(ctx, ts, log, func(ctx context.Context) {
+		if n, err := db.CollectRuns().PruneBefore(ctx, time.Now().UTC().AddDate(0, 0, -7)); err != nil {
+			log.Warn("collect_run 清理失败", "err", err)
+		} else if n > 0 {
+			log.Info("collect_run 已清理", "rows", n)
+		}
+	})
+	defer stopMaint()
+
 	srv := &http.Server{
-		Addr:              fmt.Sprintf(":%d", cfg.Server.Port),
-		Handler:           web.NewRouter(deps),
+		Addr: fmt.Sprintf(":%d", cfg.Server.Port),
+		// 明文监听需要 h2c：gRPC 客户端以 HTTP/2 prior-knowledge 建连，
+		// 不包 h2c 的话 HTTP/2 前导（PRI *）会被 gin 当成 HTTP/1.1 请求拒绝（D22）
+		Handler:           h2c.NewHandler(agent.Multiplex(grpcSrv, web.NewRouter(deps)), &http2.Server{}),
 		ReadHeaderTimeout: 10 * time.Second,
 		IdleTimeout:       120 * time.Second,
 	}
@@ -196,6 +277,8 @@ func serve(ctx context.Context, cfg config.Config, db *adapter.Store, applied in
 		log.Info("MetalWatch 已启动",
 			"version", version, "listen", srv.Addr,
 			"metadata_driver", string(db.Dialect()),
+			"tsdb_driver", ts.Name(),
+			"grpc_stream", "enabled",
 			"migrations_applied", applied,
 			"data_dir", cfg.Server.DataDir)
 		if err := srv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
@@ -215,8 +298,64 @@ func serve(ctx context.Context, cfg config.Config, db *adapter.Store, applied in
 	if err := srv.Shutdown(shutdownCtx); err != nil {
 		log.Warn("优雅停止超时，进程即将退出", "err", err)
 	}
+
+	// gRPC 优雅停止：先发 GOAWAY 等在途消息落盘（docs/03 §3.4），超时硬停
+	grpcDone := make(chan struct{})
+	go func() { grpcSrv.GracefulStop(); close(grpcDone) }()
+	select {
+	case <-grpcDone:
+	case <-time.After(5 * time.Second):
+		grpcSrv.Stop()
+	}
 	log.Info("已停止")
 	return nil
+}
+
+// loadMasterKey 加载（必要时生成）凭据加密主密钥：data/secret/master.key，0600（docs/01 D9）。
+func loadMasterKey(dataDir string, log *slog.Logger) ([]byte, error) {
+	path := filepath.Join(dataDir, "secret", "master.key")
+	if _, err := os.Stat(path); errors.Is(err, os.ErrNotExist) {
+		key, err := crypto.GenerateMasterKey(path)
+		if err != nil {
+			return nil, err
+		}
+		log.Info("凭据加密主密钥已生成", "path", path)
+		return key, nil
+	}
+	return crypto.LoadMasterKey(path)
+}
+
+// startMaintenance 周期执行 TSDB 维护与附加清理任务；返回停止函数。
+func startMaintenance(ctx context.Context, ts adapter.TimeSeriesStore, log *slog.Logger,
+	extra func(context.Context)) func() {
+	maint, ok := ts.(adapter.MaintenanceStore)
+	if !ok {
+		return func() {} // 外部时序服务自行维护
+	}
+	gctx, cancel := context.WithCancel(ctx)
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		ticker := time.NewTicker(5 * time.Minute)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-gctx.Done():
+				return
+			case <-ticker.C:
+				rolled, pruned, err := maint.Maintenance(gctx)
+				if err != nil {
+					log.Warn("时序维护失败", "err", err)
+				} else if rolled > 0 || pruned > 0 {
+					log.Info("时序维护完成", "rolled_up", rolled, "pruned", pruned)
+				}
+				if extra != nil {
+					extra(gctx)
+				}
+			}
+		}
+	}()
+	return func() { cancel(); <-done }
 }
 
 // portOf 从 "0.0.0.0:18080" 或 ":18080" 中解析端口。

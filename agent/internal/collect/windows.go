@@ -140,9 +140,12 @@ func hostIdentity(ctx context.Context) model.HostIdentity {
 }
 
 // runPS 执行 PowerShell 并把 JSON 输出转成字节流。
+// 前置强制 UTF-8 输出：中文版 Windows 的默认控制台编码（GBK 系）会产生
+// 非 UTF-8 字节，JSON 通道能容忍、Protobuf 会直接拒绝序列化。
 func runPS(ctx context.Context, script string) ([]byte, error) {
 	cmd := exec.CommandContext(ctx, "powershell.exe",
-		"-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-Command", script)
+		"-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass",
+		"-Command", "[Console]::OutputEncoding=[Text.Encoding]::UTF8; "+script)
 	out, err := cmd.Output()
 	if err != nil {
 		return nil, err

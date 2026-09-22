@@ -177,3 +177,13 @@ func (r *EnrollCodeRepo) Consume(ctx context.Context, codeHash string) error {
 	}
 	return nil
 }
+
+// Refund 归还一次注册码消费（used_count - 1）。
+// 用于「消费成功但资产创建失败」的回滚：消费与归还严格配对，注册码不被白白烧掉。
+// 仅 used_count > 0 时生效；无可归还时不视为错误。
+func (r *EnrollCodeRepo) Refund(ctx context.Context, codeHash string) error {
+	q := r.s.Rebind(`UPDATE enroll_code SET used_count = used_count - 1
+	                 WHERE code_hash = ? AND used_count > 0`)
+	_, err := r.s.ExecContext(ctx, q, codeHash)
+	return err
+}

@@ -49,7 +49,7 @@ func TestAlarmRecovery(t *testing.T) {
 	hi := Sample{Metric: "temp", Value: 90, Host: "h1"}
 	lo := Sample{Metric: "temp", Value: 70, Host: "h1"}
 
-	e.Process([]Sample{hi}, []AlarmRule{rule}, base)            // firing
+	e.Process([]Sample{hi}, []AlarmRule{rule}, base) // firing
 	if evs := e.Process([]Sample{lo}, []AlarmRule{rule}, base.Add(time.Second)); mustEvent(evs, "r1", StateRecovered) != nil {
 		t.Errorf("1 个低于周期不应恢复")
 	}

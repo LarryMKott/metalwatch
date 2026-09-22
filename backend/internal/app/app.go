@@ -9,19 +9,27 @@ import (
 	"time"
 
 	"github.com/LarryMKott/metalwatch/internal/adapter"
+	"github.com/LarryMKott/metalwatch/internal/pipeline"
 	"github.com/LarryMKott/metalwatch/internal/service"
 	"github.com/LarryMKott/metalwatch/internal/task"
+	"github.com/LarryMKott/metalwatch/internal/ws"
 	"github.com/LarryMKott/metalwatch/pkg/config"
 )
 
 // Deps 是应用运行期的依赖集合。
 type Deps struct {
-	Config  config.Config
-	Store   adapter.MetadataStore
-	TSDB    adapter.TimeSeriesStore
-	Hosts   *service.HostService
-	Pool    *task.Pool
-	Log     *slog.Logger
-	Version string
-	Started time.Time
+	Config    config.Config
+	MasterKey []byte // 凭据加密主密钥（W4；BMC 凭据接口用）
+	Store     adapter.MetadataStore
+	TSDB      adapter.TimeSeriesStore
+	Pipeline  *pipeline.Pipeline
+	Alerts    *service.AlertService
+	Hosts     *service.HostService
+	Pool      *task.Pool
+	Hub       *ws.Hub                   // WebSocket 实时推送（W7）；可为 nil
+	IPMI      *service.IPMIPoller       // 带外采集轮询器（W4）；可为 nil
+	Inventory *service.InventoryService // 资产快照与变更检测（W2）
+	Log       *slog.Logger
+	Version   string
+	Started   time.Time
 }

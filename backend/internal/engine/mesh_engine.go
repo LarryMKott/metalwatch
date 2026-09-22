@@ -39,8 +39,8 @@ func DefaultMeshConfig() MeshConfig {
 type MeshEngine struct {
 	cfg MeshConfig
 
-	mu         sync.Mutex
-	lastFP     string
+	mu          sync.Mutex
+	lastFP      string
 	lastVersion int64
 }
 

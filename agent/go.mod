@@ -3,11 +3,17 @@ module github.com/LarryMKott/metalwatch/agent
 go 1.25.0
 
 require (
-	go.etcd.io/bbolt v1.5.0 // indirect
+	github.com/LarryMKott/metalwatch v0.0.0
+	go.etcd.io/bbolt v1.5.0
+	google.golang.org/grpc v1.84.0
+	google.golang.org/protobuf v1.36.12
+)
+
+require (
 	golang.org/x/net v0.57.0 // indirect
 	golang.org/x/sys v0.47.0 // indirect
 	golang.org/x/text v0.40.0 // indirect
 	google.golang.org/genproto/googleapis/rpc v0.0.0-20260706201446-f0a921348800 // indirect
-	google.golang.org/grpc v1.84.0 // indirect
-	google.golang.org/protobuf v1.36.12 // indirect
 )
+
+replace github.com/LarryMKott/metalwatch => ../backend

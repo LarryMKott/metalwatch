@@ -15,7 +15,7 @@
 MetalWatch/
 ├── backend/      Go 服务端（Gin；api / internal{service,task,adapter,app} / pkg / proto / migrations）
 ├── frontend/     Vue3 + TypeScript（Vite + Pinia + vue-router；Node 22/24 双兼容）
-├── agent/        跨平台 Agent（仅标准库；linux / windows 分平台实现）
+├── agent/        跨平台 Agent（gRPC 双向流 + bbolt 断网续传；linux / windows 分平台实现）
 ├── deploy/       FPK 工程 + 构建脚本 + 开发用 Docker 环境
 └── docs/         01-架构 · 02-设计 · 03-计划 · 04-部署 · 05-记录（见 docs/README.md）
 ```

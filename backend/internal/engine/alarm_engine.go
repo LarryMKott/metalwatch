@@ -38,10 +38,10 @@ func (c Comparator) Match(v, threshold float64) bool {
 
 // AlarmRule 是一条告警规则。
 type AlarmRule struct {
-	ID        string
-	Metric    string
+	ID         string
+	Metric     string
 	Comparator Comparator
-	Threshold float64
+	Threshold  float64
 	// ForDuration 条件需持续该时长才触发，规避瞬时抖动误报；0 表示立即触发。
 	ForDuration time.Duration
 	// Level 为 warning 或 critical。
@@ -81,14 +81,17 @@ type Sample struct {
 	Value  float64
 	Host   string
 	At     time.Time
+	// Object 是告警对象维度（传感器槽位/磁盘设备名等，如 Disk0、Fan1）。
+	// 同一主机同一指标的不同对象各自独立去重；空表示对象无关指标。
+	Object string
 }
 
 // 告警事件状态。
 const (
-	StateFiring    = "firing"    // 已触发并应通知
-	StateRecovered = "recovered" // 已恢复
+	StateFiring     = "firing"     // 已触发并应通知
+	StateRecovered  = "recovered"  // 已恢复
 	StateSuppressed = "suppressed" // 被父告警或抑制窗口抑制，仅记录
-	StateMuted     = "muted"     // 处于维护窗口，仅记录不通知
+	StateMuted      = "muted"      // 处于维护窗口，仅记录不通知
 )
 
 // AlarmEvent 是告警引擎对一批样本处理后的输出。
@@ -96,18 +99,20 @@ type AlarmEvent struct {
 	ActiveKey string
 	RuleID    string
 	Host      string
-	Level     string
-	State     string
-	Message   string
-	At        time.Time
+	// Object 与 Sample.Object 对应，供持久化层写入 object_name。
+	Object  string
+	Level   string
+	State   string
+	Message string
+	At      time.Time
 }
 
 type alarmState struct {
-	ruleID          string
-	level           string
-	breachStart     time.Time // 条件首次为真时刻
-	firing          bool
-	lastFiredAt     time.Time
+	ruleID           string
+	level            string
+	breachStart      time.Time // 条件首次为真时刻
+	firing           bool
+	lastFiredAt      time.Time
 	consecutiveBelow int
 }
 
@@ -201,6 +206,9 @@ func (e *AlarmEngine) evalRule(r AlarmRule, s Sample, now time.Time) []AlarmEven
 	activeKey := r.ActiveKey
 	if activeKey == "" {
 		activeKey = r.ID + "@" + s.Host
+		if s.Object != "" {
+			activeKey += "/" + s.Object
+		}
 	}
 	st := e.states[activeKey]
 	if st == nil {
@@ -208,10 +216,13 @@ func (e *AlarmEngine) evalRule(r AlarmRule, s Sample, now time.Time) []AlarmEven
 		e.states[activeKey] = st
 	}
 
-	// 父告警抑制：父规则在同主机 firing 时，本规则只记录不触发。
+	// 父告警抑制：父规则在同主机同对象 firing 时，本规则只记录不触发。
 	parentFiring := false
 	if r.Parent != "" {
 		pk := r.Parent + "@" + s.Host
+		if s.Object != "" {
+			pk += "/" + s.Object
+		}
 		if ps, ok := e.states[pk]; ok && ps.firing {
 			parentFiring = true
 		}
@@ -229,7 +240,7 @@ func (e *AlarmEngine) evalRule(r AlarmRule, s Sample, now time.Time) []AlarmEven
 			if parentFiring {
 				// 被父告警抑制：保持 breachStart，待父解除后有机会触发。
 				return []AlarmEvent{{
-					ActiveKey: activeKey, RuleID: r.ID, Host: s.Host,
+					ActiveKey: activeKey, RuleID: r.ID, Host: s.Host, Object: s.Object,
 					Level: level, State: StateSuppressed,
 					Message: "被父告警抑制", At: now,
 				}}
@@ -243,7 +254,7 @@ func (e *AlarmEngine) evalRule(r AlarmRule, s Sample, now time.Time) []AlarmEven
 		// 已 firing：抑制窗口内不重复通知（去重），超出窗口则刷新一次。
 		if now.Sub(st.lastFiredAt) < e.suppressWindow {
 			return []AlarmEvent{{
-				ActiveKey: activeKey, RuleID: r.ID, Host: s.Host,
+				ActiveKey: activeKey, RuleID: r.ID, Host: s.Host, Object: s.Object,
 				Level: level, State: StateSuppressed,
 				Message: "抑制窗口内重复触发", At: now,
 			}}
@@ -260,7 +271,7 @@ func (e *AlarmEngine) evalRule(r AlarmRule, s Sample, now time.Time) []AlarmEven
 			st.firing = false
 			st.consecutiveBelow = 0
 			return []AlarmEvent{{
-				ActiveKey: activeKey, RuleID: r.ID, Host: s.Host,
+				ActiveKey: activeKey, RuleID: r.ID, Host: s.Host, Object: s.Object,
 				Level: level, State: StateRecovered,
 				Message: "指标已恢复", At: now,
 			}}
@@ -277,7 +288,7 @@ func (e *AlarmEngine) firingEvent(activeKey string, r AlarmRule, s Sample, level
 		msg = "维护窗口内，仅记录"
 	}
 	return AlarmEvent{
-		ActiveKey: activeKey, RuleID: r.ID, Host: s.Host,
+		ActiveKey: activeKey, RuleID: r.ID, Host: s.Host, Object: s.Object,
 		Level: level, State: state, Message: msg, At: now,
 	}
 }

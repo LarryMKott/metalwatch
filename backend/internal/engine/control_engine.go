@@ -10,7 +10,7 @@ import (
 // FanCurvePoint 是分段调速曲线的一段：温度不超过 TempMax（含）时目标转速为 SpeedPercent。
 // 曲线应按时 TempMax 升序排列。
 type FanCurvePoint struct {
-	TempMax     float64
+	TempMax      float64
 	SpeedPercent int32
 }
 
@@ -60,10 +60,10 @@ const (
 type FanController struct {
 	policy FanPolicy
 
-	mu          sync.Mutex
-	lastSpeed   int32
+	mu           sync.Mutex
+	lastSpeed    int32
 	lastChangeAt time.Time
-	now         func() time.Time
+	now          func() time.Time
 }
 
 // NewFanController 构造控制器，零值字段以默认值填充并校验曲线。
@@ -128,9 +128,9 @@ func (c *FanController) Step(temp float64, currentSpeed int32, host string, now 
 		c.lastSpeed = 0
 		c.lastChangeAt = now
 		return &mwpb.BmcCommand{
-			CmdType:     "fan_speed",
-			Target:      host,
-			AutoMode:    true,
+			CmdType:      "fan_speed",
+			Target:       host,
+			AutoMode:     true,
 			SpeedPercent: 0,
 		}, ChangeHandoff
 	}

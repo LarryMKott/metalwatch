@@ -50,11 +50,11 @@ type Component struct {
 
 // Inventory 是静态硬件清单（指纹未变化时可不上报）。
 type Inventory struct {
-	Fingerprint  string
-	Components   []Component
-	BIOSVersion  string
-	Mainboard    string
-	BMCFirmware  string
+	Fingerprint string
+	Components  []Component
+	BIOSVersion string
+	Mainboard   string
+	BMCFirmware string
 }
 
 // Report 是一次完整上报的载荷。

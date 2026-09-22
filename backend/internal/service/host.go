@@ -21,7 +21,7 @@ var (
 )
 
 var (
-	hostnameRe = regexp.MustCompile(`^[A-Za-z0-9]([A-Za-z0-9\-\.]{0,62}[A-Za-z0-9])?$`)
+	hostnameRe  = regexp.MustCompile(`^[A-Za-z0-9]([A-Za-z0-9\-\.]{0,62}[A-Za-z0-9])?$`)
 	validOSType = map[string]bool{"linux": true, "windows": true, "unknown": true}
 )
 
@@ -62,17 +62,17 @@ func (s *HostService) Create(ctx context.Context, in CreateHostInput) (*adapter.
 	}
 
 	h := &adapter.Host{
-		Hostname:    strings.TrimSpace(in.Hostname),
-		PrimaryIP:   strings.TrimSpace(in.PrimaryIP),
-		BMCIP:       trimPtr(in.BMCIP),
-		SN:          trimPtr(in.SN),
-		SMBIOSUUID:  trimPtr(in.SMBIOSUUID),
-		Site:        trimPtr(in.Site),
-		Rack:        trimPtr(in.Rack),
-		RackUnit:    in.RackUnit,
-		OSType:      defaultString(in.OSType, "unknown"),
-		OSVersion:   trimPtr(in.OSVersion),
-		Remark:      trimPtr(in.Remark),
+		Hostname:     strings.TrimSpace(in.Hostname),
+		PrimaryIP:    strings.TrimSpace(in.PrimaryIP),
+		BMCIP:        trimPtr(in.BMCIP),
+		SN:           trimPtr(in.SN),
+		SMBIOSUUID:   trimPtr(in.SMBIOSUUID),
+		Site:         trimPtr(in.Site),
+		Rack:         trimPtr(in.Rack),
+		RackUnit:     in.RackUnit,
+		OSType:       defaultString(in.OSType, "unknown"),
+		OSVersion:    trimPtr(in.OSVersion),
+		Remark:       trimPtr(in.Remark),
 		CollectAgent: true,
 		CollectIPMI:  in.CollectIPMI,
 		Status:       "unknown",

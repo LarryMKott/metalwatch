@@ -39,6 +39,11 @@ type Store struct {
 // Dialect 返回底层方言。
 func (s *Store) Dialect() Dialect { return s.dialect }
 
+// NewStore 用已建立的 *sql.DB 构造 Store。
+// 供内嵌时序库（adapter/tsdb）复用迁移器等能力：同一驱动、同一迁移机制、
+// 但独立的库文件与 schema 版本表（见 docs/01 D30）。
+func NewStore(db *sql.DB, d Dialect) *Store { return &Store{DB: db, dialect: d} }
+
 // Rebind 把 SQL 中的 ? 占位符转换为当前方言的写法。
 //
 // 限制：不解析引号内的 ? （本项目的 SQL 均由代码内联，不含字符串字面量中的问号）。
@@ -132,12 +137,14 @@ func Open(ctx context.Context, cfg config.Config) (*Store, error) {
 }
 
 // IsUniqueViolation 判断错误是否为唯一约束冲突（跨方言）。
+// 注意不能用裸的 "constraint failed" 匹配：sqlite 的外键冲突
+// （FOREIGN KEY constraint failed）同样含该字样，误判会把外键错误当幂等冲突吞掉。
 func IsUniqueViolation(err error) bool {
 	if err == nil {
 		return false
 	}
 	msg := strings.ToLower(err.Error())
-	return strings.Contains(msg, "unique constraint") || // sqlite / postgres
+	return strings.Contains(msg, "unique constraint") || // sqlite
 		strings.Contains(msg, "duplicate key") || // postgres
-		strings.Contains(msg, "constraint failed") // sqlite 变体
+		strings.Contains(msg, "duplicate entry") // mysql
 }

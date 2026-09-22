@@ -5,25 +5,33 @@
 //   - 鉴权：Authorization: Bearer mwa_xxx（仅 /report 与 /heartbeat；/enroll 用一次性注册码）
 //   - 响应：当前阶段为 JSON 错误信封 + JSON 成功体；
 //     proto 代码生成（make pb）落地后切换为 protobuf 响应体（见 respCodec）
+//
+// 路由域对象化（docs/01 D31 第 6 条）：AgentHandler 持有全部依赖与路由表，
+// RegisterRoutes 仅作为组合根入口，负责从依赖容器构造 Handler 并挂载。
 package agentpb
 
 import (
 	"net/http"
 	"strings"
+	"time"
 
 	"github.com/gin-gonic/gin"
 
 	"github.com/LarryMKott/metalwatch/internal/app"
+	"github.com/LarryMKott/metalwatch/internal/service"
 )
 
-// RegisterRoutes 挂载 Agent 通道路由。由 api/web 的路由装配调用。
+// RegisterRoutes 挂载 Agent 通道路由。由 api/web 的组合根调用。
 func RegisterRoutes(r *gin.Engine, d *app.Deps) {
-	g := r.Group("/api/v1/agent")
-	{
-		g.POST("/enroll", Enroll(d))
-		g.POST("/report", RequireToken(d), Report(d))
-		g.POST("/heartbeat", RequireToken(d), Heartbeat(d))
-	}
+	interval := time.Duration(d.Config.Collect.SensorInterval) * time.Second
+	assetInterval := time.Duration(d.Config.Collect.AssetInterval) * time.Second
+	h := NewAgentHandler(
+		d.Store,
+		service.NewEnrollService(d.Store, d.Hosts, interval, assetInterval, d.Log),
+		d.TSDB, d.Pipeline, d.Alerts,
+		interval, assetInterval,
+	)
+	h.Register(r)
 }
 
 // wantsProtobuf 判断请求体是否为 protobuf。

@@ -112,14 +112,14 @@ func (c *Client) Enroll(ctx context.Context, code string, id model.HostIdentity)
 
 // ReportPayload 是上报体（字段与 proto 消息一致，便于后续切换编码）。
 type ReportPayload struct {
-	BatchID     string               `json:"batch_id"`
-	HostID      int64                `json:"host_id"`
-	Mode        string               `json:"mode"`
-	CollectedAt string               `json:"collected_at"`
-	Metrics     []model.Sample       `json:"metrics"`
-	Disks       []model.DiskInfo     `json:"disks,omitempty"`
-	RAID        []model.RaidArray    `json:"raid,omitempty"`
-	Inventory   *model.Inventory     `json:"inventory,omitempty"`
+	BatchID     string            `json:"batch_id"`
+	HostID      int64             `json:"host_id"`
+	Mode        string            `json:"mode"`
+	CollectedAt string            `json:"collected_at"`
+	Metrics     []model.Sample    `json:"metrics"`
+	Disks       []model.DiskInfo  `json:"disks,omitempty"`
+	RAID        []model.RaidArray `json:"raid,omitempty"`
+	Inventory   *model.Inventory  `json:"inventory,omitempty"`
 }
 
 // Report 上报一次采集结果。

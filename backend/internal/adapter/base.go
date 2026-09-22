@@ -23,6 +23,13 @@ type MetadataStore interface {
 	Hosts() *HostRepo
 	AgentTokens() *AgentTokenRepo
 	EnrollCodes() *EnrollCodeRepo
+	Thresholds() *ThresholdRepo
+	Alerts() *AlertEventRepo
+	BMC() *BMCRepo
+	CollectRuns() *CollectRunRepo
+	Components() *ComponentRepo
+	Assets() *AssetRepo
+	NotifyChannels() *NotifyChannelRepo
 }
 
 // 编译期断言：SQLite 后端满足接口契约。
@@ -70,6 +77,20 @@ type TimeSeriesStore interface {
 	// Retention 返回原始档与聚合档的保留天数。
 	Retention() (rawDays, aggDays int)
 	Close() error
+}
+
+// IngestDeduper 是写入侧的幂等去重能力（docs/04 §2.2：batch_id 重放不重复入库）。
+// 内嵌 TSDB 用独立表实现；接入外部时序服务时也可在其前放置同样的去重层。
+type IngestDeduper interface {
+	// SeenBatch 标记一个批次为已接收，返回该批次此前是否已被处理过。
+	SeenBatch(ctx context.Context, batchID string, hostID int64, points int) (seen bool, err error)
+}
+
+// MaintenanceStore 是可选的周期维护能力（rollup 聚合、按保留期清理）。
+// 由服务端维护循环定期调用；外部时序服务通常自行维护，可不实现。
+type MaintenanceStore interface {
+	// Maintenance 执行一轮聚合与过期清理，返回处理的序列数与清理的块数。
+	Maintenance(ctx context.Context) (rolledUp int, pruned int64, err error)
 }
 
 // TimeSeriesFactory 构造时序后端实例。

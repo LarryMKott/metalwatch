@@ -7,11 +7,12 @@ import (
 
 	"github.com/LarryMKott/metalwatch/api/agentpb"
 	"github.com/LarryMKott/metalwatch/api/web/handler"
-	"github.com/LarryMKott/metalwatch/pkg/utils"
 	"github.com/LarryMKott/metalwatch/internal/app"
+	"github.com/LarryMKott/metalwatch/pkg/utils"
 )
 
-// NewRouter 组装前端 REST 路由，并挂载 Agent 上报路由。
+// NewRouter 是 REST 层的组合根：从依赖容器拆出各 Handler 需要的依赖并完成装配
+// （docs/01 D31 第 4/8 条：Deps 只在组合根出现，下层组件只认构造注入的依赖）。
 //
 // 双协议严格隔离：
 //   - /api/v1/*        → 前端 Vue：RESTful JSON（本包）
@@ -20,21 +21,20 @@ func NewRouter(d *app.Deps) *gin.Engine {
 	r := gin.New()
 	r.Use(utils.RequestID(), utils.AccessLog(d.Log), utils.Recovery(d.Log))
 
-	// 健康检查：免鉴权，供 FPK 的 cmd/main 做就绪探测与外部监控使用
-	r.GET("/healthz", handler.Health(d))
-
 	v1 := r.Group("/api/v1")
-	{
-		v1.GET("/system/status", handler.SystemStatus(d))
-		v1.GET("/system/storage/backends", handler.StorageBackends(d))
 
-		hosts := v1.Group("/hosts")
-		{
-			hosts.GET("", handler.ListHosts(d))
-			hosts.POST("", handler.CreateHost(d))
-			hosts.GET("/:id", handler.GetHost(d))
-			hosts.DELETE("/:id", handler.DeleteHost(d))
-		}
+	// 各路由域各自持有自己的路由表：构造注入依赖 → Register 挂路由
+	handler.NewSystemHandler(d.Store, d.TSDB, d.Pool, d.Config, d.Version, d.Started).
+		Register(r, v1)
+	handler.NewHostHandler(d.Hosts).Register(v1)
+	handler.NewMetricHandler(d.TSDB, d.Store).Register(v1)
+	handler.NewAlertHandler(d.Store).Register(v1)
+	handler.NewBMCHandler(d.Store, d.MasterKey, d.Pool, d.IPMI, d.Log).Register(v1)
+	handler.NewAssetHandler(d.Store).Register(v1)
+
+	// WebSocket 实时推送（W7）：/api/v1/ws/alerts
+	if d.Hub != nil {
+		d.Hub.Register(v1)
 	}
 
 	agentpb.RegisterRoutes(r, d)

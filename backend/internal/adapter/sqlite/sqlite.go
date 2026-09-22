@@ -36,9 +36,9 @@ func open(cfg config.Config) (*sql.DB, error) {
 	}
 
 	q := url.Values{}
-	q.Add("_pragma", "journal_mode(WAL)")    // 读写并发
-	q.Add("_pragma", "synchronous(NORMAL)")  // WAL 下兼顾安全与吞吐
-	q.Add("_pragma", "foreign_keys(1)")      // 默认关闭，不打开则级联删除失效
+	q.Add("_pragma", "journal_mode(WAL)")   // 读写并发
+	q.Add("_pragma", "synchronous(NORMAL)") // WAL 下兼顾安全与吞吐
+	q.Add("_pragma", "foreign_keys(1)")     // 默认关闭，不打开则级联删除失效
 	q.Add("_pragma", "temp_store(MEMORY)")
 	q.Add("_pragma", "auto_vacuum(INCREMENTAL)") // 删除后需增量回收才会缩文件
 

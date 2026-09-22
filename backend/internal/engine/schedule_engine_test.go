@@ -48,10 +48,12 @@ func TestScheduleDynamicAddRemove(t *testing.T) {
 
 	var n int32
 	eng.AddTarget(CollectionTask{ID: "a", Interval: time.Second, Run: func(context.Context) error {
-		atomic.AddInt32(&n, 1); return nil
+		atomic.AddInt32(&n, 1)
+		return nil
 	}})
 	eng.AddTarget(CollectionTask{ID: "b", Interval: time.Second, Run: func(context.Context) error {
-		atomic.AddInt32(&n, 1); return nil
+		atomic.AddInt32(&n, 1)
+		return nil
 	}})
 	if d := eng.Tick(context.Background(), clk); d != 2 {
 		t.Errorf("两个目标应分派 2, 实际 %d", d)
@@ -79,7 +81,8 @@ func TestScheduleBackoffSkips(t *testing.T) {
 
 	var n int32
 	eng.AddTarget(CollectionTask{ID: "x", Interval: time.Second, Run: func(context.Context) error {
-		atomic.AddInt32(&n, 1); return errBoom{}
+		atomic.AddInt32(&n, 1)
+		return errBoom{}
 	}})
 	// 第一次：执行（失败并进入退避），计入分派
 	if d := eng.Tick(context.Background(), now0); d != 1 {
@@ -107,7 +110,8 @@ func TestScheduleRunLoopSmoke(t *testing.T) {
 	eng := NewScheduleEngine(ScheduleConfig{Pool: pool, SensorInterval: 5 * time.Millisecond})
 	var n int32
 	eng.AddTarget(CollectionTask{ID: "loop", Interval: 5 * time.Millisecond, Run: func(context.Context) error {
-		atomic.AddInt32(&n, 1); return nil
+		atomic.AddInt32(&n, 1)
+		return nil
 	}})
 	ctx, cancel := context.WithCancel(context.Background())
 	eng.Run(ctx)

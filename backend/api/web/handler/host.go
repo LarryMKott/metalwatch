@@ -1,5 +1,6 @@
 // Package handler 承载前端 REST 接口的具体处理函数。
-// 只做三件事：解析参数、调用服务层、封装响应；不写业务规则。
+// 每个路由域一个 Handler 结构体（D31 第 6 条）：构造函数注入依赖 + Register 注册路由 +
+// 每条路由一个方法；只做三件事：解析参数、调用服务层、封装响应，不写业务规则。
 package handler
 
 import (
@@ -8,10 +9,9 @@ import (
 
 	"github.com/gin-gonic/gin"
 
-	"github.com/LarryMKott/metalwatch/pkg/utils"
 	"github.com/LarryMKott/metalwatch/internal/adapter"
-	"github.com/LarryMKott/metalwatch/internal/app"
 	"github.com/LarryMKott/metalwatch/internal/service"
+	"github.com/LarryMKott/metalwatch/pkg/utils"
 )
 
 // HostDTO 是资产对外的 JSON 表示（字段名与 docs/04 契约一致）。
@@ -38,8 +38,8 @@ type HostDTO struct {
 	UpdatedAt    string `json:"updated_at"`
 }
 
-// ToHostDTO 把存储层模型转为对外 DTO。
-func ToHostDTO(h *adapter.Host) HostDTO {
+// toHostDTO 把存储层模型转为对外 DTO（纯转换工具，无状态）。
+func toHostDTO(h *adapter.Host) HostDTO {
 	d := HostDTO{
 		ID: h.ID, Hostname: h.Hostname, PrimaryIP: h.PrimaryIP, OSType: h.OSType,
 		CollectAgent: h.CollectAgent, CollectIPMI: h.CollectIPMI, Status: h.Status,
@@ -62,90 +62,103 @@ func ToHostDTO(h *adapter.Host) HostDTO {
 	return d
 }
 
-// ListHosts 返回分页资产列表。
-func ListHosts(d *app.Deps) gin.HandlerFunc {
-	return func(c *gin.Context) {
-		ctx, cancel := utils.Timeout(c, 5*time.Second)
-		defer cancel()
+// HostHandler 承载资产台账接口。
+type HostHandler struct {
+	hosts *service.HostService
+}
 
-		limit, offset := utils.Pagination(c)
-		items, total, err := d.Hosts.List(ctx, adapter.ListFilter{
-			Keyword: c.Query("q"), Status: c.Query("status"),
-			Limit: limit, Offset: offset,
-		})
-		if err != nil {
-			utils.Fail(c, err)
-			return
-		}
+// NewHostHandler 构造资产处理器。
+func NewHostHandler(hosts *service.HostService) *HostHandler {
+	return &HostHandler{hosts: hosts}
+}
 
-		out := make([]HostDTO, 0, len(items))
-		for _, h := range items {
-			out = append(out, ToHostDTO(h))
-		}
-		c.JSON(http.StatusOK, gin.H{
-			"items": out, "total": total,
-			"page": offset/limit + 1, "page_size": limit,
-		})
+// Register 把资产域路由挂到 /api/v1 分组上。
+func (h *HostHandler) Register(v1 *gin.RouterGroup) {
+	g := v1.Group("/hosts")
+	{
+		g.GET("", h.List)
+		g.POST("", h.Create)
+		g.GET("/:id", h.Get)
+		g.DELETE("/:id", h.Delete)
 	}
 }
 
-// CreateHost 手工录入一台资产。
-func CreateHost(d *app.Deps) gin.HandlerFunc {
-	return func(c *gin.Context) {
-		ctx, cancel := utils.Timeout(c, 5*time.Second)
-		defer cancel()
+// List 返回分页资产列表。
+func (h *HostHandler) List(c *gin.Context) {
+	ctx, cancel := utils.Timeout(c, 5*time.Second)
+	defer cancel()
 
-		var in service.CreateHostInput
-		if err := c.ShouldBindJSON(&in); err != nil {
-			utils.BadJSON(c, err)
-			return
-		}
-		h, err := d.Hosts.Create(ctx, in)
-		if err != nil {
-			utils.Fail(c, err)
-			return
-		}
-		c.JSON(http.StatusCreated, ToHostDTO(h))
+	limit, offset := utils.Pagination(c)
+	items, total, err := h.hosts.List(ctx, adapter.ListFilter{
+		Keyword: c.Query("q"), Status: c.Query("status"),
+		Limit: limit, Offset: offset,
+	})
+	if err != nil {
+		utils.Fail(c, err)
+		return
 	}
+
+	out := make([]HostDTO, 0, len(items))
+	for _, host := range items {
+		out = append(out, toHostDTO(host))
+	}
+	c.JSON(http.StatusOK, gin.H{
+		"items": out, "total": total,
+		"page": offset/limit + 1, "page_size": limit,
+	})
 }
 
-// GetHost 读取单台资产详情。
-func GetHost(d *app.Deps) gin.HandlerFunc {
-	return func(c *gin.Context) {
-		ctx, cancel := utils.Timeout(c, 5*time.Second)
-		defer cancel()
+// Create 手工录入一台资产。
+func (h *HostHandler) Create(c *gin.Context) {
+	ctx, cancel := utils.Timeout(c, 5*time.Second)
+	defer cancel()
 
-		id, err := utils.IDParam(c)
-		if err != nil {
-			utils.Fail(c, err)
-			return
-		}
-		h, err := d.Hosts.Get(ctx, id)
-		if err != nil {
-			utils.Fail(c, err)
-			return
-		}
-		c.JSON(http.StatusOK, ToHostDTO(h))
+	var in service.CreateHostInput
+	if err := c.ShouldBindJSON(&in); err != nil {
+		utils.BadJSON(c, err)
+		return
 	}
+	host, err := h.hosts.Create(ctx, in)
+	if err != nil {
+		utils.Fail(c, err)
+		return
+	}
+	c.JSON(http.StatusCreated, toHostDTO(host))
 }
 
-// DeleteHost 删除资产（部件/快照级联，告警历史保留）。
-func DeleteHost(d *app.Deps) gin.HandlerFunc {
-	return func(c *gin.Context) {
-		ctx, cancel := utils.Timeout(c, 5*time.Second)
-		defer cancel()
+// Get 读取单台资产详情。
+func (h *HostHandler) Get(c *gin.Context) {
+	ctx, cancel := utils.Timeout(c, 5*time.Second)
+	defer cancel()
 
-		id, err := utils.IDParam(c)
-		if err != nil {
-			utils.Fail(c, err)
-			return
-		}
-		if err := d.Hosts.Delete(ctx, id); err != nil {
-			utils.Fail(c, err)
-			return
-		}
-		c.Status(http.StatusNoContent)
+	id, err := utils.IDParam(c)
+	if err != nil {
+		utils.Fail(c, err)
+		return
 	}
+	host, err := h.hosts.Get(ctx, id)
+	if err != nil {
+		utils.Fail(c, err)
+		return
+	}
+	c.JSON(http.StatusOK, toHostDTO(host))
+}
+
+// Delete 删除资产（部件/快照级联，告警历史保留）。
+func (h *HostHandler) Delete(c *gin.Context) {
+	ctx, cancel := utils.Timeout(c, 5*time.Second)
+	defer cancel()
+
+	id, err := utils.IDParam(c)
+	if err != nil {
+		utils.Fail(c, err)
+		return
+	}
+	if err := h.hosts.Delete(ctx, id); err != nil {
+		utils.Fail(c, err)
+		return
+	}
+	c.Status(http.StatusNoContent)
 }
 
 func deref(p *string) string {
