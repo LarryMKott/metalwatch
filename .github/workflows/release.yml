@@ -21,8 +21,11 @@ name: Release
 #   飞牛包      arm（arm64）          metalwatch-fpk-arm64-<版本>.fpk
 #   WebUI       全平台共用            metalwatch-webui-<版本>.tar.gz
 #   校验和                            SHA256SUMS
+#   发布日志     Release 描述（正文）    上次发版至今的分组提交记录，
+#                                     由 deploy/tools/gen_release_notes.py 生成
 #
 # 命名规则集中在 deploy/tools/collect_release_assets.py，改上传名要同步改那里。
+# 发布日志的生成机制（基线推断 / 分组规则 / 兜底链）见 deploy/tools/gen_release_notes.py。
 on:
   push:
     tags: ['v*']
@@ -350,7 +353,11 @@ jobs:
     timeout-minutes: 20
     needs: [meta, webui, server, agent, fpk, verify-server]
     steps:
+      # fetch-depth: 0 —— 发布日志要按「上一个语义化 tag」推断基线并遍历其后的
+      # 全部提交，默认的浅克隆（depth=1）会让日志退化成「最近 30 个提交」
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
       - uses: actions/setup-python@v5
         with:
@@ -377,6 +384,29 @@ jobs:
             echo '```'
           } >> "$GITHUB_STEP_SUMMARY"
 
+      # 发布正文携带本次修改记录（上次发版至今的分组提交日志）。
+      # 脚本内部自带兜底链（--from → CHANGELOG 标记 → 语义化 tag → 最近 N 条），
+      # 这里再兜最后一层：脚本本身崩溃时退化为原始 git log，日志生成绝不阻断发布
+      #（与 fn-finstat 的 ci_build.sh 第 5 步同一策略）。
+      - name: 生成发布日志（上次发版至今的分组提交记录）
+        run: |
+          set -euo pipefail
+          if ! python deploy/tools/gen_release_notes.py \
+            --tag "${{ needs.meta.outputs.version }}" \
+            -o RELEASE_NOTES.md; then
+            echo "⚠️ 日志脚本失败，退化为原始 git log" >&2
+            git log --no-merges --oneline -n 50 > RELEASE_NOTES.md
+          fi
+          # 空文件会让 --notes-file 发出一篇空白正文，视同失败
+          test -s RELEASE_NOTES.md
+          {
+            echo "### 发布日志预览"
+            echo ""
+            echo '```markdown'
+            cat RELEASE_NOTES.md
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
       - name: 创建或更新 Release
         # 干跑时整条链路照跑，唯独不碰仓库：不建 tag、不建 Release。
         # 判断写成 event_name + inputs 双条件，是因为 tag 推送时 inputs 为空。
@@ -387,11 +417,14 @@ jobs:
           set -euo pipefail
           TAG="${{ needs.meta.outputs.tag }}"
           if gh release view "$TAG" >/dev/null 2>&1; then
-            # 已存在就只补资产：重跑流水线时不至于因为「tag 已发布」而整体失败
-            echo "Release $TAG 已存在，覆盖上传资产"
+            # 已存在就只补资产与正文：重跑流水线时不至于因为「tag 已发布」而整体失败
+            echo "Release $TAG 已存在，覆盖上传资产与发布说明"
             gh release upload "$TAG" dist/* --clobber
+            gh release edit "$TAG" --notes-file RELEASE_NOTES.md
           else
-            args=(--title "MetalWatch $TAG" --generate-notes)
+            # 正文用刚生成的 RELEASE_NOTES.md（本次修改记录），
+            # 不再用 --generate-notes（那是 GitHub 自动拼的提交列表，无分组、无指引）
+            args=(--title "MetalWatch $TAG" --notes-file RELEASE_NOTES.md)
             if [ "${{ inputs.draft }}" = "true" ]; then
               args+=(--draft)
               echo "按草稿发布（人工确认后再手动 publish）"
@@ -400,9 +433,11 @@ jobs:
           fi
 
       # 干跑没有 Release 页面可看，资产改从 artifact 取，同样能核对名字与校验和
-      - name: 干跑时把资产作为 artifact 上传
+      - name: 干跑时把资产与发布日志作为 artifact 上传
         if: ${{ inputs.dry_run == true }}
-        uses: actions/upload-artifact@v4
+        run: cp RELEASE_NOTES.md dist/
+      - uses: actions/upload-artifact@v4
+        if: ${{ inputs.dry_run == true }}
         with:
           name: release-assets-dry-run
           path: dist/

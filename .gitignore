@@ -84,3 +84,7 @@ desktop.ini
 
 # Python 测试报告产物
 tests/python/reports/
+
+# Release 发布说明：发布时由 deploy/tools/gen_release_notes.py 现场生成，不入库
+#（累积历史在 CHANGELOG.md；GitHub 的 --notes-file 直接吃构建期文件，无 Gitee 的入库约束）
+RELEASE_NOTES.md
