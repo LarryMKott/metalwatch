@@ -32,7 +32,7 @@ make check          # fmt + vet + test + race
 
 # 端到端
 make pb             # 生成 protobuf 代码（需 protoc）
-make fpk            # 产出飞牛 FPK 安装包（需 fnpack）
+make fpk            # 产出飞牛 FPK 安装包（需 fnpack，本机已装在 D:\dev\fnpack）
 
 # 本地运行（开发环境：无参数即可，配置 / 数据目录 / 监听地址都走开发默认值）
 cd backend && go run ./cmd/server
@@ -65,7 +65,11 @@ python deploy/script/build_fpk.py 0.2.0                    # 默认 x86 包（pl
 python deploy/script/build_fpk.py 0.2.0 --goarch arm64     # ARM 包 → manifest 写 platform=arm
 python deploy/script/build_fpk.py 0.2.0 --require-fnpack   # CI 用：缺 fnpack 直接失败
 python deploy/script/build_fpk.py 0.2.0 --skip-frontend    # 前端已构建好时跳过
+python deploy/script/build_fpk.py 0.2.0 --check-only       # 只回写 manifest + 骨架校验，不编译不打包
 ```
+
+⚠️ 出包脚本会改写 `deploy/fpk/metalwatch/manifest` 的 `version=` 与 `platform=`，
+本机连出两个架构后 `platform` 会停在上一次的值 —— **提交前先看 `git status`**。
 
 ## 运行环境（开发 / 生产）
 
@@ -103,12 +107,12 @@ cd agent   && go run ./cmd/windows --code <注册码>       # 注册并把凭据
 
 | 层 | 选型 | 说明 |
 | --- | --- | --- |
-| 服务端 | Go 1.23+，Gin 1.12 | `CGO_ENABLED=0` 静态编译；前端产物 `go:embed` |
+| 服务端 | Go 1.23+，Gin 1.12 | `CGO_ENABLED=0` 静态编译；前端产物 `go:embed`（**待接线**，当前无静态路由，见看板 §6） |
 | 存储（可插拔） | 默认 **SQLite**（`modernc.org/sqlite`，纯 Go）；MySQL / PostgreSQL / GBase8s 支持**独立部署** | 通过 `db.driver` + `db.dsn` 切换，业务代码零改动 |
 | 时序（可插拔） | 默认**进程内嵌 TSDB**；Prometheus / VictoriaMetrics / InfluxDB2 支持独立部署 | `timeseries.driver` + `timeseries.endpoint` |
 | Agent 通道 | **gRPC 双向流 + Protobuf** | 与前端 JSON 通道严格隔离；与 WebUI 共用 18080，按 `Content-Type` 分流（D22）；proto 见 `backend/proto/` |
 | 前端 | Vue 3.5 + Composition API + TS + Vite 8 + Pinia + vue-router + ECharts 6 | `engines: ">=22.12.0 <25"` |
-| 打包 | 飞牛 native FPK（`manifest` + `cmd/` + `wizard/` + `app/server/metalwatch`） | 无容器；**按架构分别出包**：`platform=x86`（amd64）与 `platform=arm`（arm64），不可写 `all` |
+| 打包 | 飞牛 native FPK（`manifest` + **九个 `cmd/` 生命周期脚本** + `wizard/` + `app/server/metalwatch`） | 无容器；**按架构分别出包**：`platform=x86`（amd64）与 `platform=arm`（arm64），不可写 `all`；本机已装 fnpack（`D:\dev\fnpack`），双架构均已实出 |
 | CI/CD | GitHub Actions 两条流水线 | `ci.yml` 分平台测试与编译（**`go test -race` 只能在这里跑**）；`release.yml` 推 `v*` tag 出三平台服务端/Agent + 双架构 FPK + `SHA256SUMS` 并发布。见 [`docs/04-部署/02-CI与发布流水线.md`](docs/04-部署/02-CI与发布流水线.md) |
 
 ## 存储后端现状（`GET /api/v1/system/storage/backends` 返回同一份数据）
@@ -138,6 +142,8 @@ cd agent   && go run ./cmd/windows --code <注册码>       # 注册并把凭据
 - ⚠️ 本机禁用 `git rm -r`（曾连带删除 `deploy/` 子树下 7 个未修改文件，详见 `.workbuddy/memory/`）。
 - **发版**：`git tag v0.2.0 && git push origin v0.2.0` → CI 自动出包并创建 Release。
   推 tag 前建议先跑一遍本机自查（见 [`docs/04-部署/02-CI与发布流水线.md`](docs/04-部署/02-CI与发布流水线.md) §6）。
+  不确定发布链路是否还好的时候，先用 `release.yml` 的 **`dry_run`** 干跑一次：
+  构建 / 打包 / 制品冒烟 / 归集全跑，**不建 tag 也不建 Release**。
 
 
 ## 文档
@@ -146,7 +152,7 @@ cd agent   && go run ./cmd/windows --code <注册码>       # 注册并把凭据
 
 | 目录 | 内容 |
 | --- | --- |
-| `docs/01-架构/` | 总体架构、关键决策 D1–D38 |
+| `docs/01-架构/` | 总体架构、关键决策 D1–D40 |
 | `docs/02-设计/` | 数据设计、接口契约、通信协议、模块验收 |
 | `docs/03-计划/` | 开发计划、**进度看板** |
 | `docs/04-部署/` | FPK 打包与真机验证、**CI 与发布流水线** |
@@ -160,6 +166,6 @@ cd agent   && go run ./cmd/windows --code <注册码>       # 注册并把凭据
 当前主线：
 
 1. **服务端接线 WebUI 静态资源**（当前 FPK 装完看不到界面：后端没有静态路由/`go:embed`）；
-2. **W12 收尾**：本机装 `fnpack` 出 `.fpk`（或直接推 tag 交给 CI）→ 上飞牛真机验证三项（静态二进制运行 / package 用户写权限 / 重装数据恢复）；
+2. **W12 收尾 → 上真机**：包本机就能出（fnpack 在 `D:\dev\fnpack`，双架构实测出包）→ 装到飞牛设备验证四项（静态二进制运行 / package 用户写权限 / 重装恢复 / 升级迁移）；
 3. **W15 BMC 管控后端接入**（proto + `pkg/ipmi` + 前端页面已就绪，缺服务端接线）；
 4. **W9 巡检报表**（XLSX 优先）。
