@@ -97,3 +97,49 @@ jobs:
           python-version: '3.12'
       - name: 校验骨架（强制文件 / JSON / LF 换行 / 端口一致 / native 形态断言）
         run: python deploy/tools/check_fpk.py
+
+  python-tests:
+    name: Python 三层测试（冒烟 / 单元 / 集成，D34 门禁）
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          cache-dependency-path: backend/go.sum
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: 安装 pytest + allure-pytest
+        run: pip install pytest allure-pytest
+
+      - name: 构建服务端
+        working-directory: backend
+        run: go build -o bin/metalwatch ./cmd/server
+
+      - name: 启动服务端（全新数据目录）
+        working-directory: backend
+        run: |
+          ./bin/metalwatch serve --data ./ci-data --listen 0.0.0.0:18080 &
+          for i in $(seq 1 30); do
+            curl -sf http://127.0.0.1:18080/healthz && break
+            sleep 1
+          done
+          curl -sf http://127.0.0.1:18080/healthz
+          test -f ci-data/bootstrap_admin.txt
+
+      - name: 运行三层测试（离线判定用例无 Agent 自动跳过）
+        working-directory: tests/python
+        env:
+          MW_DATA_DIR: ${{ github.workspace }}/backend/ci-data
+        run: python run_tests.py all --fast
+
+      - name: 上传测试报告
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: python-test-reports
+          path: tests/python/reports/
