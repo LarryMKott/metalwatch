@@ -10,6 +10,7 @@ import (
 	"net"
 	"regexp"
 	"strings"
+	"time"
 
 	"github.com/LarryMKott/metalwatch/internal/adapter"
 )
@@ -45,14 +46,35 @@ type CreateHostInput struct {
 type HostService struct {
 	repo *adapter.HostRepo
 	log  *slog.Logger
+	// alerts 用于删除主机时收尾其遗留的 firing 告警；未注入时为 nil（单测与
+	// 纯资产场景无需该依赖，删除退化为只删主机行）。
+	alerts alertReconciler
 }
 
-// NewHostService 构造资产管理服务。
-func NewHostService(repo *adapter.HostRepo, log *slog.Logger) *HostService {
+// alertReconciler 是 HostService 对告警仓储的最小依赖面。
+// 用接口而不是具体类型：HostService 不需要知道告警怎么存，只需要「按主机收尾」这一个动作。
+type alertReconciler interface {
+	ResolveByHost(ctx context.Context, hostID int64, at string) (int, error)
+}
+
+// HostServiceOption 是 HostService 的可选依赖。
+type HostServiceOption func(*HostService)
+
+// WithAlertReconciler 注入告警收尾能力（删除主机时解除其 firing 告警）。
+func WithAlertReconciler(r alertReconciler) HostServiceOption {
+	return func(s *HostService) { s.alerts = r }
+}
+
+// NewHostService 构造资产管理服务。可选依赖用选项注入，既有调用点无需改动。
+func NewHostService(repo *adapter.HostRepo, log *slog.Logger, opts ...HostServiceOption) *HostService {
 	if log == nil {
 		log = slog.Default()
 	}
-	return &HostService{repo: repo, log: log}
+	s := &HostService{repo: repo, log: log}
+	for _, o := range opts {
+		o(s)
+	}
+	return s
 }
 
 // Create 校验并写入一台资产。
@@ -110,16 +132,40 @@ func (s *HostService) List(ctx context.Context, f adapter.ListFilter) ([]*adapte
 	return s.repo.List(ctx, f)
 }
 
-// Delete 删除资产。
+// Delete 删除资产，并收尾该主机遗留的 firing 告警。
+//
+// 告警收尾必须在 DELETE 之前完成：alert_event.host_id 是 ON DELETE SET NULL，
+// 主机行一旦消失，就没有任何字段能把遗留的 firing 行关联回来 —— 它们会永久停在
+// firing（占住 active_key 唯一键、CountFiring 长期虚高），且同名主机重建时
+// 新告警会 UPDATE 到这些无主行上，按主机关联查询不到。
 func (s *HostService) Delete(ctx context.Context, id int64) error {
 	if id <= 0 {
 		return fmt.Errorf("%w: 非法的主机 ID", ErrInvalidInput)
 	}
-	err := s.repo.Delete(ctx, id)
-	if errors.Is(err, adapter.ErrNotFound) {
-		return fmt.Errorf("%w: 主机 %d 不存在", ErrNotFoundInService, id)
+	// 先确认存在再收尾：否则会把告警收尾作用在一台并未被删除的主机上。
+	// 顺带保持 ErrNotFound 的对外语义与改动前一致，不依赖 Delete 的受影响行数。
+	if _, err := s.repo.GetByID(ctx, id); err != nil {
+		if errors.Is(err, adapter.ErrNotFound) {
+			return fmt.Errorf("%w: 主机 %d 不存在", ErrNotFoundInService, id)
+		}
+		return err
 	}
-	if err != nil {
+
+	if s.alerts != nil {
+		n, err := s.alerts.ResolveByHost(ctx, id, formatUTC(time.Now()))
+		if err != nil {
+			// 收尾失败就不删：宁可让用户重试，也不留下再也关联不回来的 firing 行
+			return fmt.Errorf("解除主机 %d 的告警失败，已取消删除: %w", id, err)
+		}
+		if n > 0 {
+			s.log.Info("主机告警已随删除解除", "id", id, "resolved", n)
+		}
+	}
+
+	if err := s.repo.Delete(ctx, id); err != nil {
+		if errors.Is(err, adapter.ErrNotFound) {
+			return fmt.Errorf("%w: 主机 %d 不存在", ErrNotFoundInService, id)
+		}
 		return err
 	}
 	s.log.Info("资产已删除", "id", id)

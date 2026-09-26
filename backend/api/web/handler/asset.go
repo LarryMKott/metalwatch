@@ -11,17 +11,20 @@ import (
 	"github.com/gin-gonic/gin"
 
 	"github.com/LarryMKott/metalwatch/internal/adapter"
+	"github.com/LarryMKott/metalwatch/internal/service"
 	"github.com/LarryMKott/metalwatch/pkg/utils"
 )
 
 // AssetHandler 承载部件与变更查询。
 type AssetHandler struct {
 	store adapter.MetadataStore
+	hosts *service.HostService
 }
 
-// NewAssetHandler 构造资产查询处理器。
-func NewAssetHandler(store adapter.MetadataStore) *AssetHandler {
-	return &AssetHandler{store: store}
+// NewAssetHandler 构造资产查询处理器。主机存在性校验走 service 层
+// （领域错误 → 404；直接摸仓储会把裸 ErrNotFound 映射成 500）。
+func NewAssetHandler(store adapter.MetadataStore, hosts *service.HostService) *AssetHandler {
+	return &AssetHandler{store: store, hosts: hosts}
 }
 
 // Register 挂载本域路由。
@@ -58,7 +61,7 @@ func (h *AssetHandler) Components(c *gin.Context) {
 	ctx, cancel := utils.Timeout(c, 5*time.Second)
 	defer cancel()
 
-	if _, err := h.store.Hosts().GetByID(ctx, id); err != nil {
+	if _, err := h.hosts.Get(ctx, id); err != nil {
 		utils.Fail(c, err)
 		return
 	}
@@ -104,7 +107,7 @@ func (h *AssetHandler) Changes(c *gin.Context) {
 	ctx, cancel := utils.Timeout(c, 5*time.Second)
 	defer cancel()
 
-	if _, err := h.store.Hosts().GetByID(ctx, id); err != nil {
+	if _, err := h.hosts.Get(ctx, id); err != nil {
 		utils.Fail(c, err)
 		return
 	}

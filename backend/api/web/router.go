@@ -40,8 +40,8 @@ func NewRouter(d *app.Deps) *gin.Engine {
 	handler.NewHostHandler(d.Hosts).Register(v1)
 	handler.NewMetricHandler(d.TSDB, d.Store).Register(v1)
 	handler.NewAlertHandler(d.Store).Register(v1)
-	handler.NewBMCHandler(d.Store, d.MasterKey, d.Pool, d.IPMI, d.Log).Register(v1)
-	handler.NewAssetHandler(d.Store).Register(v1)
+	handler.NewBMCHandler(d.Store, d.Hosts, d.MasterKey, d.Pool, d.IPMI, d.Log).Register(v1)
+	handler.NewAssetHandler(d.Store, d.Hosts).Register(v1)
 
 	// W11：鉴权 / 开放令牌 / 审计
 	handler.NewAuthHandler(d.Store, d.MasterKey, 0).Register(v1)

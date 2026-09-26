@@ -30,6 +30,7 @@ import (
 // masterKey 为凭据加密主密钥（docs/01 D9）；pool/poller 允许为 nil（带外未启用时 test 返回 503）。
 type BMCHandler struct {
 	store     adapter.MetadataStore
+	hosts     *service.HostService // 主机存在性经 service 层校验（404 语义）
 	masterKey []byte
 	pool      *task.Pool
 	poller    *service.IPMIPoller
@@ -37,12 +38,13 @@ type BMCHandler struct {
 }
 
 // NewBMCHandler 构造带外管理处理器。
-func NewBMCHandler(store adapter.MetadataStore, masterKey []byte,
+func NewBMCHandler(store adapter.MetadataStore, hosts *service.HostService, masterKey []byte,
 	pool *task.Pool, poller *service.IPMIPoller, log *slog.Logger) *BMCHandler {
 	if log == nil {
 		log = slog.Default()
 	}
-	return &BMCHandler{store: store, masterKey: masterKey, pool: pool, poller: poller, log: log}
+	return &BMCHandler{store: store, hosts: hosts, masterKey: masterKey,
+		pool: pool, poller: poller, log: log}
 }
 
 // Register 挂载本域路由。
@@ -102,7 +104,7 @@ func (h *BMCHandler) SetCredential(c *gin.Context) {
 	ctx, cancel := utils.Timeout(c, 10*time.Second)
 	defer cancel()
 
-	if _, err := h.store.Hosts().GetByID(ctx, id); err != nil {
+	if _, err := h.hosts.Get(ctx, id); err != nil {
 		utils.Fail(c, err)
 		return
 	}
@@ -138,6 +140,10 @@ func (h *BMCHandler) RemoveCredential(c *gin.Context) {
 	ctx, cancel := utils.Timeout(c, 10*time.Second)
 	defer cancel()
 
+	if _, err := h.hosts.Get(ctx, id); err != nil {
+		utils.Fail(c, err)
+		return
+	}
 	existed, err := h.store.BMC().Delete(ctx, id)
 	if err != nil {
 		utils.Fail(c, err)

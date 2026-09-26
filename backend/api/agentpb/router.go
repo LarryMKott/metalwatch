@@ -11,6 +11,7 @@
 package agentpb
 
 import (
+	"io"
 	"net/http"
 	"strings"
 	"time"
@@ -48,9 +49,26 @@ func respCodec(c *gin.Context) string {
 	return "json"
 }
 
+// drainLimit / drainTimeout 给排空请求体设上限。
+// /enroll 在鉴权之前（见 handler.go 的路由注册），无上限的 io.Copy 会被
+// 慢速或超大 body 拖成 DoS（生产监听 0.0.0.0）。
+//
+// 注意：不要改用 http.Server.ReadTimeout 来兜这个底 —— gRPC 双向流是长连接，
+// 全局读超时会把它一起掐断。这里只对当前请求设置读截止时间。
+const (
+	drainLimit   = 1 << 20 // 1MB，远大于正常注册/心跳请求体
+	drainTimeout = 5 * time.Second
+)
+
 // notImplementedProtobuf 在 proto 代码生成落地前，对 protobuf 请求给出可执行的提示，
 // 而不是静默地把二进制当 JSON 解析（那样只会得到难以定位的解析错误）。
+// 必须先排空请求体再写响应：未读 body 直接 501 会触发连接 RST，
+// Agent 端只能看到传输错误（按断网语义错误地进 spool 重试），看不到 501 提示。
 func notImplementedProtobuf(c *gin.Context) {
+	// SetReadDeadline 在 h2c 下可能不被支持（取决于 x/net/http2 版本），忽略该错误：
+	// 大小上限本身已挡住超大 body，读截止时间只是额外兜住「只发一半就挂着」的慢速 body。
+	_ = http.NewResponseController(c.Writer).SetReadDeadline(time.Now().Add(drainTimeout))
+	_, _ = io.Copy(io.Discard, http.MaxBytesReader(c.Writer, c.Request.Body, drainLimit))
 	c.JSON(http.StatusNotImplemented, gin.H{
 		"code": "protobuf_not_enabled",
 		"message": "Protobuf 编解码随 proto 代码生成启用（make pb）；" +

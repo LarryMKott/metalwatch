@@ -161,6 +161,11 @@ func (h *AuthHandler) changePassword(c *gin.Context) {
 		utils.Fail(c, err)
 		return
 	}
+	if u == nil {
+		// Get 对不存在的账号返回 (nil, nil)：不判就会在下一行解引用 nil（被 Recovery 兜成 500）
+		utils.Unauthorized(c, "account_not_found", "账号不存在或已注销")
+		return
+	}
 	if !crypto.VerifyPassword(u.PasswordHash, req.OldPassword) {
 		h.appendAudit(c, "auth.change_password", "denied", u.Username, `{"reason":"bad_credential"}`)
 		utils.Unauthorized(c, "bad_credential", "原口令不正确")

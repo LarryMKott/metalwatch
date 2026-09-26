@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/LarryMKott/metalwatch/internal/adapter"
@@ -53,6 +54,55 @@ type AlertService struct {
 
 	mu    sync.RWMutex
 	rules *ruleSet // 不可变规则集，ReloadRules 整体替换（读写锁保护指针）
+
+	// worker 非 nil 时 dispatch 走异步投递（见 StartDispatch）。
+	// 未启动（单测、未接线）时退化为同步，保持既有语义。
+	worker atomic.Pointer[dispatchWorker]
+}
+
+// dispatchItem 是一次待投递的通知。
+type dispatchItem struct {
+	event *adapter.AlertEvent
+	kind  string
+	at    time.Time
+}
+
+// dispatchWorker 是异步投递的后台工作者。
+type dispatchWorker struct {
+	ch chan dispatchItem
+}
+
+// StartDispatch 启动异步通知投递，必须在 serve 期间调用一次。
+//
+// 为什么需要它：dispatch 会走 webhook 投递，而 webhook 对不可达目标最坏要
+// 4×10s 超时 + 0/1/5/25s 退避 ≈ 71s/渠道，多渠道串行。原先是同步调用，
+// 且发生在 Agent 上报协程里 —— 目标一挂，上报链路就被拖住、断网补传越积越多。
+//
+// 队列满时丢弃并记 warn：事件已经落库（WebUI 仍可查），通知可丢，上报链路不能被拖住。
+func (s *AlertService) StartDispatch(ctx context.Context, workers, queue int) {
+	if workers < 1 {
+		workers = 1
+	}
+	if queue < 1 {
+		queue = 128
+	}
+	w := &dispatchWorker{ch: make(chan dispatchItem, queue)}
+	s.worker.Store(w)
+
+	for i := 0; i < workers; i++ {
+		go func() {
+			for {
+				select {
+				case it := <-w.ch:
+					s.dispatchSync(ctx, it.event, it.kind, it.at)
+				case <-ctx.Done():
+					// 退出时不强求排空：进程正在停，投递用同一个已取消的 ctx 也发不出去。
+					return
+				}
+			}
+		}()
+	}
+	s.log.Info("告警通知改为异步投递", "workers", workers, "queue", queue)
 }
 
 // NewAlertService 构造告警服务。store 供通知载荷补全主机信息；extra 两项允许为零值。
@@ -259,12 +309,15 @@ func (s *AlertService) Evaluate(ctx context.Context, hostID int64, hostname stri
 		switch ev.State {
 		case engine.StateFiring:
 			e := s.toEvent(ev, meta, hostID, hostname, val)
-			created, _, err := s.alerts.UpsertFiring(ctx, e, ev.ActiveKey, formatUTC(at))
+			created, id, err := s.alerts.UpsertFiring(ctx, e, ev.ActiveKey, formatUTC(at))
 			if err != nil {
 				s.log.Warn("告警事件写入失败", "key", ev.ActiveKey, "err", err)
 				continue
 			}
 			if created {
+				// 回填事件 ID：通知载荷与 notify_state 回写都依赖它
+				// （此前 ID 被丢弃，payload 里 id=0，notify_state 永远停在 pending）
+				e.ID = id
 				// 只在「新触发」时对外通知；抑制窗口内的重复触发仅刷新落库行
 				s.dispatch(ctx, e, "alert.firing", at)
 			}
@@ -361,7 +414,25 @@ func ptrString(s string) *string { return &s }
 
 // dispatch 把一次状态变化推给 WebSocket 与 Webhook 通道（均允许未启用）。
 // 通知失败只记日志：通知链路故障不应影响采集与判定主链路。
+//
+// 已调用 StartDispatch 时只入队（不阻塞调用方），否则同步执行 ——
+// 单测与未接线场景保持既有语义。
 func (s *AlertService) dispatch(ctx context.Context, e *adapter.AlertEvent, event string, at time.Time) {
+	w := s.worker.Load()
+	if w == nil {
+		s.dispatchSync(ctx, e, event, at)
+		return
+	}
+	select {
+	case w.ch <- dispatchItem{event: e, kind: event, at: at}:
+	default:
+		// 队列积压说明下游长期不可达；丢弃并留下痕迹，不要无声无息地丢通知
+		s.log.Warn("通知队列已满，本次投递被丢弃", "event", event, "alert_id", e.ID)
+	}
+}
+
+// dispatchSync 是实际投递实现：补全载荷后推 WebSocket 与 webhook。
+func (s *AlertService) dispatchSync(ctx context.Context, e *adapter.AlertEvent, event string, at time.Time) {
 	var host *adapter.Host
 	if e.HostID != nil {
 		if h, err := s.store.Hosts().GetByID(ctx, *e.HostID); err == nil {
@@ -395,11 +466,14 @@ func (s *AlertService) RaiseAgentOffline(ctx context.Context, host *adapter.Host
 		Title:     fmt.Sprintf("Agent 离线：%s 超过 2×采集周期未上报", host.Hostname),
 		Detail:    ptrString(fmt.Sprintf(`{"host_id":%d,"last_seen_at":%q}`, host.ID, formatUTC(at))),
 	}
-	created, _, err := s.alerts.UpsertFiring(ctx, e, agentOfflineKey(host.ID), formatUTC(at))
+	created, id, err := s.alerts.UpsertFiring(ctx, e, agentOfflineKey(host.ID), formatUTC(at))
 	if err != nil {
 		return err
 	}
 	if created {
+		// 回填事件 ID：通知层靠它把 notify_state 写回（webhook.markEvent 对 ID<=0 直接跳过）。
+		// 与 Evaluate 里的处理保持一致——漏了这步，离线告警会永远停在 pending。
+		e.ID = id
 		s.dispatch(ctx, e, "agent.offline", at)
 	}
 	return nil

@@ -127,13 +127,22 @@ func authenticate(c *gin.Context, cfg AuthConfig) (*authz.Subject, bool) {
 		sub := &authz.Subject{Kind: "user", UserID: s.UserID, Username: s.Username, Role: s.Role}
 		// 会话签发后角色可能已被改：以库里为准，防止权限回收后旧令牌仍生效
 		if cfg.Store != nil {
-			if u, err := cfg.Store.Users().Get(c.Request.Context(), s.UserID); err == nil && u != nil {
-				sub.Role = u.Role
-				sub.Username = u.Username
-				if u.State != "active" {
-					utils.Forbidden(c, "account_disabled", "账号已停用")
-					return nil, false
-				}
+			u, err := cfg.Store.Users().Get(c.Request.Context(), s.UserID)
+			if err != nil {
+				utils.Fail(c, err)
+				return nil, false
+			}
+			if u == nil {
+				// 账号已被删除。会话令牌是无状态自签凭证、没有服务端吊销表，
+				// 这里放行就等于「删号后旧令牌（可能是 admin）还能用满 12h」。
+				utils.Unauthorized(c, "account_not_found", "账号不存在或已注销")
+				return nil, false
+			}
+			sub.Role = u.Role
+			sub.Username = u.Username
+			if u.State != "active" {
+				utils.Forbidden(c, "account_disabled", "账号已停用")
+				return nil, false
 			}
 		}
 		return sub, true

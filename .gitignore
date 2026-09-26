@@ -30,6 +30,21 @@ node_modules/
 
 # 本地运行数据
 tmp-data/
+# CI 起服用的数据目录（ci.yml: --data ./ci-data）：
+# 内含 metalwatch.db 与 bootstrap_admin.txt（初始管理员**明文口令**），绝不可入库
+ci-data/
+# SQLite 运行时库（元数据库 / Agent spool），一律不入库
+*.db
+
+# 本地开发产物：编译好的二进制与运行时数据（backend/bin-local、agent/bin-local）
+# 内含 Agent 凭据文件（token / credentials.json / host_id.txt）——绝不可入库
+bin-local/
+
+# 临时探针的编译产物（源码在 backend/devtools/ 下，正常入库）
+streamprobe.exe
+
+# 无依赖的脚本目录里被误生成的 npm 锁文件
+deploy/script/package-lock.json
 
 # Python
 __pycache__/
@@ -64,3 +79,6 @@ desktop.ini
 
 # 编辑器/工具自动生成的忽略文件（同步自 .gitignore，无需入库）
 .zcodeignore
+
+# Python 测试报告产物
+tests/python/reports/

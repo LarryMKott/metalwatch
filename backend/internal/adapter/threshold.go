@@ -172,14 +172,8 @@ func (r *AlertEventRepo) UpsertFiring(ctx context.Context, e *AlertEvent, active
 		return false, 0, err
 	}
 	if n, _ := res.RowsAffected(); n > 0 {
-		id, _ := res.LastInsertId() // UPDATE 语义下 LastInsertId 不可靠，回查
-		var existing int64
-		qerr := r.s.QueryRowContext(ctx, r.s.Rebind(
-			`SELECT id FROM alert_event WHERE active_key = ? AND state = 'firing'`), activeKey).Scan(&existing)
-		if qerr == nil {
-			id = existing
-		}
-		return false, id, nil
+		// UPDATE 语义下 LastInsertId 不可靠，一律回查
+		return false, r.firingID(ctx, activeKey), nil
 	}
 	res, err = r.s.ExecContext(ctx, r.s.Rebind(
 		`INSERT INTO alert_event
@@ -189,20 +183,37 @@ func (r *AlertEventRepo) UpsertFiring(ctx context.Context, e *AlertEvent, active
 		e.HostID, e.Severity, e.Category, e.Metric, e.ObjectName, e.Value, e.Threshold,
 		e.Title, e.Detail, activeKey, at, at)
 	if err != nil && IsUniqueViolation(err) {
-		_, err = r.s.ExecContext(ctx, r.s.Rebind(
-			`UPDATE alert_event SET last_seen_at = ?, value = ?
+		// 并发插入撞唯一索引：退化为刷新。SET 列必须与主分支完全一致——
+		// 少写 severity/title 会让这条路径上的告警等级升级静默失效。
+		if _, uerr := r.s.ExecContext(ctx, r.s.Rebind(
+			`UPDATE alert_event
+			 SET last_seen_at = ?, value = ?, severity = ?, title = ?
 			 WHERE active_key = ? AND state = 'firing'`),
-			at, e.Value, activeKey)
-		var existing int64
-		_ = r.s.QueryRowContext(ctx, r.s.Rebind(
-			`SELECT id FROM alert_event WHERE active_key = ? AND state = 'firing'`), activeKey).Scan(&existing)
-		return false, existing, err
+			at, e.Value, e.Severity, e.Title, activeKey); uerr != nil {
+			return false, 0, uerr
+		}
+		return false, r.firingID(ctx, activeKey), nil
 	}
 	if err != nil {
 		return false, 0, err
 	}
-	id, _ := res.LastInsertId()
+	// LastInsertId 不被 PostgreSQL 驱动支持，SQLite 下也非绝对可靠 → 回查兜底。
+	// （原先直接返回 LastInsertId 且忽略其错误，跨方言接入后新建行 id 会恒为 0，
+	// 调用方据此写 notify_state 时会静默跳过。）
+	id, lerr := res.LastInsertId()
+	if lerr != nil || id == 0 {
+		id = r.firingID(ctx, activeKey)
+	}
 	return true, id, nil
+}
+
+// firingID 回查 active_key 对应 firing 行的 ID：新建、刷新与并发冲突三条路径都需要它。
+// 查不到（或查询失败）时返回 0，调用方应据此认为「无法定位事件行」而不是当成有效 ID。
+func (r *AlertEventRepo) firingID(ctx context.Context, activeKey string) int64 {
+	var id int64
+	_ = r.s.QueryRowContext(ctx, r.s.Rebind(
+		`SELECT id FROM alert_event WHERE active_key = ? AND state = 'firing'`), activeKey).Scan(&id)
+	return id
 }
 
 // Resolve 把 active_key 对应的 firing 事件置为已恢复（active_key 置 NULL，保留故障史）。
@@ -217,6 +228,24 @@ func (r *AlertEventRepo) Resolve(ctx context.Context, activeKey, at string) (boo
 	}
 	n, _ := res.RowsAffected()
 	return n > 0, nil
+}
+
+// ResolveByHost 把某主机的全部 firing 事件收尾为已恢复，返回解除条数。
+//
+// 删除主机前必须调用：主机没了就没有样本，引擎不会再产生它的 recovered 事件，
+// 这些行会永久停在 firing —— active_key 仍非空会占住 UNIQUE 键、CountFiring
+// 长期虚高；而且同名主机重建时新告警会 UPDATE 到旧行上（此时该行 host_id 已被
+// ON DELETE SET NULL 置空），按主机关联查询不到。
+func (r *AlertEventRepo) ResolveByHost(ctx context.Context, hostID int64, at string) (int, error) {
+	res, err := r.s.ExecContext(ctx, r.s.Rebind(
+		`UPDATE alert_event
+		 SET state = 'resolved', resolved_at = ?, last_seen_at = ?, active_key = NULL
+		 WHERE host_id = ? AND state = 'firing'`), at, at, hostID)
+	if err != nil {
+		return 0, err
+	}
+	n, _ := res.RowsAffected()
+	return int(n), nil
 }
 
 // Touch 刷新 firing 事件的最近触发时间与当前值（抑制窗口内的重复触发不产生新行）。
@@ -302,7 +331,7 @@ func (r *AlertEventRepo) List(ctx context.Context, f AlertFilter) ([]AlertEvent,
 	q := `SELECT a.id, a.host_id, a.severity, a.category, a.metric, a.object_name,
 	             a.value, a.threshold, a.title, a.detail, a.state, a.active_key,
 	             a.first_seen_at, a.last_seen_at, a.resolved_at, a.ack_by, a.ack_at,
-	             a.notify_state, h.hostname
+	             a.notify_state, COALESCE(h.hostname, '') AS hostname
 	      FROM alert_event a
 	      LEFT JOIN host h ON h.id = a.host_id` +
 		where + " ORDER BY a.first_seen_at DESC, a.id DESC LIMIT ? OFFSET ?"

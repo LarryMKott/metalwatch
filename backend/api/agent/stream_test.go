@@ -339,3 +339,83 @@ func TestMultiplexServesRest(t *testing.T) {
 		t.Fatal("非 gRPC 请求未被分流到 REST 侧")
 	}
 }
+
+// TestStreamAssetSnapshotInventory 验证 W2/W18 链路：gRPC asset 上行 → 指纹 diff →
+// 部件树落库 → 变更事件（首次基线不产生变更）。
+func TestStreamAssetSnapshotInventory(t *testing.T) {
+	h := newHarness(t)
+	en := h.enroll("grpc-node-inv")
+
+	stream, err := h.openStream(en.AgentToken)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	now := time.Now().UTC().Truncate(time.Second)
+	sendAsset := func(batch string, at time.Time, dimmB bool) {
+		snap := &gen.AssetSnapshot{Fingerprint: "agent", BiosVersion: "2.15.1"}
+		snap.Cpu = &gen.CpuInfo{Model: "Xeon 4310", Socket: "CPU1", Cores: 12}
+		snap.Memory = append(snap.Memory, &gen.MemInfo{Slot: "DIMM_A1", Manufacturer: "Samsung",
+			PartNumber: "M393A1", SizeBytes: 32 << 30})
+		if dimmB {
+			snap.Memory = append(snap.Memory, &gen.MemInfo{Slot: "DIMM_B1", Manufacturer: "Samsung",
+				PartNumber: "M393B2", SizeBytes: 32 << 30})
+		}
+		if err := stream.Send(&gen.AgentReport{
+			Kind: "asset", BatchId: batch, Timestamp: at.UnixMilli(), Asset: snap,
+		}); err != nil {
+			t.Fatalf("发送资产快照失败: %v", err)
+		}
+	}
+	sendAsset("inv-b1", now, true)
+	sendAsset("inv-b2", now.Add(time.Minute), true)   // 指纹未变
+	sendAsset("inv-b3", now.Add(2*time.Minute), true) // 指纹未变
+	if err := stream.CloseSend(); err != nil {
+		t.Fatal(err)
+	}
+	for {
+		if _, err := stream.Recv(); err != nil {
+			break
+		}
+	}
+
+	// 部件树：cpu + 2 dimm + bios（raid 为 nil 不落）
+	comps, err := h.store.Components().ListActive(context.Background(), en.HostId, "")
+	if err != nil || len(comps) != 4 {
+		t.Fatalf("部件数 = %d err=%v, want 4", len(comps), err)
+	}
+	// 基线之后指纹未变 → 无变更事件
+	events, err := h.store.Assets().ListChanges(context.Background(), en.HostId, 100)
+	if err != nil || len(events) != 0 {
+		t.Fatalf("基线+未变不应有变更: %d err=%v", len(events), err)
+	}
+
+	// 抽走 DIMM_B 连续两轮 → removed（经流上行同样走 D11 去抖）
+	stream2, err := h.openStream(en.AgentToken)
+	if err != nil {
+		t.Fatal(err)
+	}
+	send2 := func(batch string, at time.Time) {
+		snap := &gen.AssetSnapshot{Fingerprint: "agent", BiosVersion: "2.15.1"}
+		snap.Cpu = &gen.CpuInfo{Model: "Xeon 4310", Socket: "CPU1", Cores: 12}
+		snap.Memory = append(snap.Memory, &gen.MemInfo{Slot: "DIMM_A1", Manufacturer: "Samsung",
+			PartNumber: "M393A1", SizeBytes: 32 << 30})
+		_ = stream2.Send(&gen.AgentReport{Kind: "asset", BatchId: batch, Timestamp: at.UnixMilli(), Asset: snap})
+	}
+	send2("inv-b4", now.Add(3*time.Minute)) // 缺席 1：标记
+	send2("inv-b5", now.Add(4*time.Minute)) // 缺席 2：确认 removed
+	_ = stream2.CloseSend()
+	for {
+		if _, err := stream2.Recv(); err != nil {
+			break
+		}
+	}
+	events, err = h.store.Assets().ListChanges(context.Background(), en.HostId, 100)
+	if err != nil || len(events) != 1 || events[0].ChangeType != "removed" {
+		t.Fatalf("连续缺席应产生 1 条 removed: %d err=%v", len(events), err)
+	}
+	// 变更应回链 asset_change 告警
+	if events[0].AlertEventID == nil || *events[0].AlertEventID <= 0 {
+		t.Fatalf("变更未回链告警: %+v", events[0])
+	}
+}

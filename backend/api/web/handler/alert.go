@@ -108,14 +108,14 @@ func (h *AlertHandler) Templates(c *gin.Context) {
 		return
 	}
 	type thresholdTemplateDTO struct {
-		ID          int64  `json:"id"`
-		Name        string `json:"name"`
-		Metric      string `json:"metric"`
-		Op          string `json:"op"`
-		Threshold   float64
-		Severity    string `json:"severity"`
-		ForDuration string `json:"for_duration"`
-		Enabled     bool   `json:"enabled"`
+		ID          int64   `json:"id"`
+		Name        string  `json:"name"`
+		Metric      string  `json:"metric"`
+		Op          string  `json:"op"`
+		Threshold   float64 `json:"threshold"`
+		Severity    string  `json:"severity"`
+		ForDuration string  `json:"for_duration"`
+		Enabled     bool    `json:"enabled"`
 	}
 	out := make([]thresholdTemplateDTO, 0, len(tpls))
 	for _, t := range tpls {
