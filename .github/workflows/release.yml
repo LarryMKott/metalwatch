@@ -246,7 +246,7 @@ jobs:
     name: FPK · ${{ matrix.platform }}（GOARCH=${{ matrix.goarch }}）
     runs-on: ubuntu-latest
     timeout-minutes: 30
-    needs: [meta, webui]
+    needs: [meta]
     strategy:
       fail-fast: false
       matrix:
@@ -265,18 +265,11 @@ jobs:
         with:
           python-version: ${{ env.PYTHON_VERSION }}
 
-      - name: 取回前端产物
-        uses: actions/download-artifact@v4
-        with:
-          name: webui-dist
-          path: webui
-
-      - name: 解包到 frontend/dist
-        run: |
-          set -euo pipefail
-          mkdir -p frontend/dist
-          tar -xzf webui/*.tar.gz -C frontend/dist
-          ls frontend/dist | head
+      # 这里**不**去取 webui-dist：FPK 里目前只装原生二进制 + app/ui 的入口配置，
+      # 前端产物要等服务端上 go:embed 才有消费者（已知缺口，见 docs/04 §5）。
+      # 原先写了一步「下载 webui 并解包到 frontend/dist」，但 build_fpk.py 从不读它，
+      # 属于看着像"前端已进包"、实际什么都没装的假动作，故删除。
+      # webui job 本身保留：它产出的 metalwatch-webui-<版本>.tar.gz 仍是发布资产之一。
 
       - name: 安装 fnpack
         run: |
@@ -287,7 +280,7 @@ jobs:
           fnpack --help >/dev/null
           echo "fnpack 就绪：$(command -v fnpack)"
 
-      # --skip-frontend：前端已在上游 job 构建并回填，避免每个架构重复构建一次
+      # --skip-frontend：FPK 不装前端产物（见上），跳过 npm 构建
       # --require-fnpack：缺 fnpack 时直接失败，绝不允许「静默跳过打包却报成功」
       - name: 构建 FPK（编译 + 回写版本与 platform + 骨架校验 + 打包）
         run: |
