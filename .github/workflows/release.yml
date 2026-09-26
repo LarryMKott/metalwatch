@@ -342,7 +342,10 @@ jobs:
   # release: 归集资产、算校验和、创建 Release
   # ============================================================
   release:
-    name: 发布 GitHub Release
+    # 干跑时这个 job 照常运行（归集与校验和仍要跑，资产还要作为 artifact 上传），
+    # 只有「创建或更新 Release」那一步被跳过。于是它在运行列表里显示 success ——
+    # 名字带上后缀，避免有人看到 success 以为真发过版。
+    name: 发布 GitHub Release${{ inputs.dry_run == true && '（干跑：不建 tag 与 Release）' || '' }}
     runs-on: ubuntu-latest
     timeout-minutes: 20
     needs: [meta, webui, server, agent, fpk, verify-server]
