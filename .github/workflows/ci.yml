@@ -257,6 +257,13 @@ jobs:
       - name: 校验骨架（强制文件 / JSON / LF 换行 / 端口一致 / native 形态 / platform 断言）
         run: python deploy/tools/check_fpk.py
 
+      # 用 CI 自己的 Python 版本执行一遍打包脚本本体（只做 manifest 回写 + 骨架校验）。
+      # 为什么必须：开发机是 3.13、这里是 3.12，只有**真执行**才拦得住两边 API 的差异。
+      # 本仓库已踩过一次：`Path.read_text(newline=...)` 参数是 3.13 才加的，
+      # 本地一路绿灯，到了发布流水线才 TypeError —— 靠发布干跑才发现。
+      - name: 打包脚本在本机 Python 下跑一遍（--check-only）
+        run: python deploy/script/build_fpk.py 0.0.0-ci --check-only --goarch amd64
+
   # ============================================================
   # Python 侧：静态检查
   # ============================================================

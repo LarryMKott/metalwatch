@@ -10,7 +10,12 @@
 
 用法：
   python deploy/script/build_fpk.py [版本号] [--skip-frontend] [--goos linux] [--goarch amd64]
-                                    [--platform x86|arm] [--no-check]
+                                    [--platform x86|arm] [--no-check] [--check-only]
+
+版本兼容：
+  本脚本在 CI（Python 3.12）与本机（3.13）都要跑。**只用两边都有的 API**：
+  例如 `Path.read_text(newline=...)` 是 3.13 才加的，3.12 会 TypeError。
+  CI 的 `fpk-skeleton` job 会带 `--check-only` 跑一遍本脚本，专门拦这类差异。
 
 多架构：
   包内含原生二进制，飞牛清单的 platform 必须与二进制架构一致（**不可写 all**）。
@@ -134,7 +139,12 @@ def sync_version(version: str, platform: str) -> None:
     """
     print(f"==> [3/5] 同步 manifest（version={version} platform={platform}）")
     mf = FPK / "manifest"
-    text = mf.read_text(encoding="utf-8", newline="")
+    # 用 open(newline="") 而不是 Path.read_text(newline=...)：后者的 newline 参数
+    # 是 Python 3.13 才加的，CI 用 3.12 会直接 TypeError
+    # （干跑发布流水线时踩到：本机 3.13 跑得通，CI 3.12 跑不通）。
+    # newline="" 表示不做换行翻译，读到什么写回什么，不会把 LF 变成 CRLF。
+    with mf.open("r", encoding="utf-8", newline="") as fh:
+        text = fh.read()
     new = re.sub(r"^version=.*$", f"version={version}", text, count=1, flags=re.M)
     new = re.sub(r"^platform=.*$", f"platform={platform}", new, count=1, flags=re.M)
     if new != text:
@@ -182,6 +192,10 @@ def main() -> int:
     ap.add_argument("--platform", default="",
                     help="manifest.platform（x86/arm）。缺省按 --goarch 推导，推导不出则报错")
     ap.add_argument("--no-check", action="store_true")
+    ap.add_argument("--check-only", action="store_true",
+                    help="只跑 manifest 回写 + 骨架校验，不编译不打包。"
+                         "CI 用它在本机的 Python 版本下执行一遍脚本本体——"
+                         "本机 3.13 / CI 3.12 的 API 差异只有这样才拦得住")
     ap.add_argument("--require-fnpack", action="store_true",
                     help="缺 fnpack 时判定失败（CI 用；本地开发可不开）")
     args = ap.parse_args()
@@ -192,6 +206,14 @@ def main() -> int:
         version = m.group(1).strip() if m else "0.1.0"
 
     platform = resolve_platform(args.goarch, args.platform)
+
+    if args.check_only:
+        sync_version(version, platform)
+        if not check():
+            print("骨架校验失败")
+            return 1
+        print(f"\ncheck-only 完成（未编译、未打包）：version={version} platform={platform}")
+        return 0
 
     if not args.skip_frontend and not build_frontend():
         print("前端构建失败")
