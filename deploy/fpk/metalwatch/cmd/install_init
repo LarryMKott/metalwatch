@@ -1,0 +1,71 @@
+#!/bin/bash
+# install_init —— 安装**前**执行（飞牛调用时机：用户安装应用之前）
+#
+# 职责只有「环境检查」。此时应用文件尚未解压，所以本脚本**不创建目录、不依赖
+# app/ 下的任何内容**——目录与配置的落地全部在 install_callback。
+# 把校验前置到这里，是为了让非法取值在文件落盘之前就失败，
+# 而不是装到一半才发现、留下半套状态。
+set -u
+
+LOG_DIR="${TRIM_PKGVAR:-}/logs"
+LOG_FILE="${LOG_DIR}/metalwatch.log"
+
+log_msg() {
+  [ -n "${TRIM_PKGVAR:-}" ] || return 0
+  mkdir -p "$LOG_DIR" 2>/dev/null || return 0
+  echo "$(date '+%Y-%m-%d %H:%M:%S') - $1" >> "$LOG_FILE"
+}
+
+fail() {
+  log_msg "INSTALL_INIT ERROR: $1"
+  # 用户可见的错误会回显在安装界面；变量缺失时不静默吞掉（仍写日志）
+  [ -n "${TRIM_TEMP_LOGFILE:-}" ] && echo "$1" > "$TRIM_TEMP_LOGFILE"
+  exit 1
+}
+
+# 1. 平台注入的路径变量：缺失说明调用环境不对，继续装下去只会留下烂摊子
+[ -n "${TRIM_PKGVAR:-}" ] || fail "安装环境异常：缺少 TRIM_PKGVAR，无法确定数据目录，请联系应用维护者。"
+[ -n "${TRIM_PKGETC:-}" ] || fail "安装环境异常：缺少 TRIM_PKGETC，无法确定配置目录，请联系应用维护者。"
+
+# 2. 服务端口（manifest 声明为单一 service_port，WebUI / 管理 API / Agent 上报共用）
+PORT="${TRIM_SERVICE_PORT:-18080}"
+case "$PORT" in ''|*[!0-9]*) fail "服务端口无效：${PORT}" ;; esac
+[ "$PORT" -ge 1 ] && [ "$PORT" -le 65535 ] || fail "服务端口需在 1~65535 之间，当前为 ${PORT}。"
+
+# 3. 向导取值：规则与 install_callback 完全一致。向导界面已校验过一遍，
+#    这里防的是取值被绕过界面注入 —— 真正写进配置前的最后一道闸。
+CONCURRENCY="${wizard_ipmi_concurrency:-16}"
+SENSOR_INTERVAL="${wizard_sensor_interval:-30}"
+RETENTION_DAYS="${wizard_metric_retention_days:-180}"
+LOG_LEVEL="${wizard_log_level:-info}"
+TIMEZONE="${wizard_timezone:-Asia/Shanghai}"
+GEOIP_ENABLE="${wizard_geoip_enable:-true}"
+ADMIN_USER="${wizard_admin_user:-admin}"
+ADMIN_PASSWORD="${wizard_admin_password:-}"
+
+case "$CONCURRENCY" in ''|*[!0-9]*) fail "IPMI 采集并发数必须为数字，当前为 ${CONCURRENCY}。" ;; esac
+[ "$CONCURRENCY" -ge 1 ] && [ "$CONCURRENCY" -le 256 ] \
+  || fail "IPMI 采集并发数需在 1~256 之间，当前为 ${CONCURRENCY}。"
+
+case "$SENSOR_INTERVAL" in ''|*[!0-9]*) fail "传感器采集周期必须为数字，当前为 ${SENSOR_INTERVAL}。" ;; esac
+[ "$SENSOR_INTERVAL" -ge 10 ] && [ "$SENSOR_INTERVAL" -le 600 ] \
+  || fail "传感器采集周期需在 10~600 秒之间，当前为 ${SENSOR_INTERVAL}。"
+
+case "$RETENTION_DAYS" in ''|*[!0-9]*) fail "聚合指标保留天数必须为数字，当前为 ${RETENTION_DAYS}。" ;; esac
+
+case "$LOG_LEVEL" in
+  debug|info|warn|error) : ;;
+  *) fail "日志级别只能是 debug / info / warn / error，当前为 ${LOG_LEVEL}。" ;;
+esac
+
+case "$GEOIP_ENABLE" in
+  true|false) : ;;
+  *) fail "GeoIP 开关只能是 true / false，当前为 ${GEOIP_ENABLE}。" ;;
+esac
+
+[ -n "$TIMEZONE" ] || fail "时区不能为空。"
+[ -n "$ADMIN_USER" ] || fail "管理员账号不能为空。"
+[ "${#ADMIN_PASSWORD}" -ge 8 ] || fail "管理员密码至少 8 位。"
+
+log_msg "安装前检查通过：port=${PORT} concurrency=${CONCURRENCY} interval=${SENSOR_INTERVAL}s retention=${RETENTION_DAYS}d level=${LOG_LEVEL}"
+exit 0

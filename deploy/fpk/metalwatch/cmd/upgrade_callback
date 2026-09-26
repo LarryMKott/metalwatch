@@ -27,15 +27,18 @@ log_msg "升级：${TRIM_OLD_APPVER:-未知} -> ${TRIM_APPVER:-未知}"
 [ -f "$CONF_FILE" ] || fail "升级失败：缺少配置文件 ${CONF_FILE}，请先在应用设置中完成配置。"
 
 # 迁移期间必须停止服务，避免旧进程持有数据库连接
+# （stop 幂等：upgrade_init 通常已经停过，这里只是兜底）
 if [ -x "${APP_ROOT}/cmd/main" ]; then
   "${APP_ROOT}/cmd/main" stop >> "$LOG_FILE" 2>&1 || true
 fi
 
-# 升级前快照：元数据库是关键资产，体积小，直接复制一份带版本号的副本
-BACKUP="${DATA_DIR}/metalwatch.db.bak.${TRIM_OLD_APPVER:-unknown}"
-if [ -f "${DATA_DIR}/metalwatch.db" ]; then
-  cp -f "${DATA_DIR}/metalwatch.db" "$BACKUP" 2>> "$LOG_FILE" \
-    || log_msg "WARN: 升级前快照失败（不影响继续，但回滚时无本地副本）"
+# 升级前的元数据库快照不在这里做：已前移到 upgrade_init。
+# 那时进程刚停、数据完整，且尚未开始替换文件；放在 callback 里等于在
+# 「结构可能已被新二进制碰过」之后才拍快照，退路不够干净。
+if [ -f "${DATA_DIR}/metalwatch.db.pre-upgrade.${TRIM_OLD_APPVER:-unknown}" ]; then
+  log_msg "使用 upgrade_init 生成的升级前快照：metalwatch.db.pre-upgrade.${TRIM_OLD_APPVER:-unknown}"
+else
+  log_msg "WARN: 未找到 upgrade_init 的快照，本次升级没有本地回滚副本"
 fi
 
 if "$APP_BIN" migrate --config "$CONF_FILE" --data "$DATA_DIR" >> "$LOG_FILE" 2>&1; then

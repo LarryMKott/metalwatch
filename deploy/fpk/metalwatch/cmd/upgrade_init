@@ -1,0 +1,55 @@
+#!/bin/bash
+# upgrade_init —— 升级**前**执行（飞牛调用时机：用户升级应用之前，早于新文件替换）
+#
+# 三件事，都必须在文件被替换之前做完：
+#   1. 前置检查：配置文件与生命周期脚本在位，否则升级必然烂尾；
+#   2. 停止进程：原生应用的二进制马上要被替换，且结构迁移需要独占数据库连接；
+#   3. 升级前快照：元数据库是关键资产、体积小，复制一份带旧版本号的副本当回滚网。
+#      此时进程已停，副本不会捕到「写了一半」的状态。
+#
+# 与 upgrade_callback 的分工：init 管「升级前」（停机 + 快照），callback 管
+# 「升级后」（迁移 + 拉起）。快照只在这里做一次，不在两边各做一遍。
+set -u
+
+APP_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+CONF_FILE="${TRIM_PKGETC:-}/metalwatch.yaml"
+DATA_DIR="${TRIM_PKGVAR:-}/data"
+LOG_DIR="${TRIM_PKGVAR:-}/logs"
+LOG_FILE="${LOG_DIR}/metalwatch.log"
+
+log_msg() {
+  [ -n "${TRIM_PKGVAR:-}" ] || return 0
+  mkdir -p "$LOG_DIR" 2>/dev/null || return 0
+  echo "$(date '+%Y-%m-%d %H:%M:%S') - $1" >> "$LOG_FILE"
+}
+
+fail() {
+  log_msg "UPGRADE_INIT ERROR: $1"
+  [ -n "${TRIM_TEMP_LOGFILE:-}" ] && echo "$1" > "$TRIM_TEMP_LOGFILE"
+  exit 1
+}
+
+log_msg "升级开始：${TRIM_OLD_APPVER:-未知} -> ${TRIM_APPVER:-未知}"
+
+# 1. 前置检查
+[ -n "${TRIM_PKGVAR:-}" ] || fail "升级中止：缺少 TRIM_PKGVAR，无法确定数据目录。"
+[ -f "$CONF_FILE" ] || fail "升级中止：缺少配置文件 ${CONF_FILE}，请先完成应用配置后重试。"
+[ -x "${APP_ROOT}/cmd/main" ] || fail "升级中止：未找到生命周期脚本 ${APP_ROOT}/cmd/main。"
+
+# 2. 停进程（幂等：未运行也算成功）
+if ! "${APP_ROOT}/cmd/main" stop >> "$LOG_FILE" 2>&1; then
+  log_msg "WARN: 停止进程返回非零，继续升级（迁移前 callback 还会再停一次）"
+fi
+
+# 3. 升级前快照（仅在已有元数据库时）
+if [ -f "${DATA_DIR}/metalwatch.db" ]; then
+  BACKUP="${DATA_DIR}/metalwatch.db.pre-upgrade.${TRIM_OLD_APPVER:-unknown}"
+  if cp -f "${DATA_DIR}/metalwatch.db" "$BACKUP" 2>> "$LOG_FILE"; then
+    log_msg "已生成升级前快照：${BACKUP}"
+  else
+    # 回滚网不能缺：宁可中止升级，也不要在一个没有退路的版本上进迁移
+    fail "升级前快照失败（${BACKUP}），请检查磁盘空间与目录权限后重试。"
+  fi
+fi
+
+exit 0

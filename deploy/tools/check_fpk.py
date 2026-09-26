@@ -42,6 +42,17 @@ print("=== 1. 打包强校验文件 ===")
 for rel in ("manifest", "config/privilege", "config/resource", "ICON.PNG", "ICON_256.PNG"):
     (ok if (PKG / rel).exists() else bad)(f"{rel} 存在")
 
+# 生命周期脚本必须九个齐全：fnpack 会在打包时报 "Required file cmd/xxx is missing"，
+# 但它是**打包中途**才报，而且失败时仍返回退出码 0（只能靠「没有 .fpk 产出」判失败）。
+# 九个脚本的清单取自 fnpack 官方模板（`fnpack create <app>` 生成）+ 官方文档目录结构。
+# 漏一个的代价整条发布链路挂掉，所以在这里先拦。
+for rel in ("cmd/main",
+            "cmd/install_init", "cmd/install_callback",
+            "cmd/upgrade_init", "cmd/upgrade_callback",
+            "cmd/uninstall_init", "cmd/uninstall_callback",
+            "cmd/config_init", "cmd/config_callback"):
+    (ok if (PKG / rel).exists() else bad)(f"{rel} 存在")
+
 print("\n=== 2. JSON 合法性 ===")
 json_files = ["config/privilege", "config/resource", "app/ui/config",
               "wizard/install", "wizard/config", "wizard/uninstall"]

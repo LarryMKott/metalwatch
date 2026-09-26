@@ -1,0 +1,58 @@
+#!/bin/bash
+# config_init —— 配置变更**前**执行（飞牛调用时机：用户在应用设置页改环境变量，
+# 早于 config_callback）
+#
+# 只做校验，不落任何文件：校验放在这里的意义是让非法取值在「变更真正生效之前」
+# 就被拒绝。若挪到 callback 里做，渲染到一半才失败会留下
+# 「配置文件写了一半 + 进程已重启」的不一致状态。
+# 真正的渲染与重启在 config_callback。
+set -u
+
+LOG_DIR="${TRIM_PKGVAR:-}/logs"
+LOG_FILE="${LOG_DIR}/metalwatch.log"
+
+log_msg() {
+  [ -n "${TRIM_PKGVAR:-}" ] || return 0
+  mkdir -p "$LOG_DIR" 2>/dev/null || return 0
+  echo "$(date '+%Y-%m-%d %H:%M:%S') - $1" >> "$LOG_FILE"
+}
+
+fail() {
+  log_msg "CONFIG_INIT ERROR: $1"
+  [ -n "${TRIM_TEMP_LOGFILE:-}" ] && echo "$1" > "$TRIM_TEMP_LOGFILE"
+  exit 1
+}
+
+# 端口来自 manifest 声明，不在配置向导里；仍校验一次，防止声明被改坏后静默生效
+PORT="${TRIM_SERVICE_PORT:-18080}"
+case "$PORT" in ''|*[!0-9]*) fail "服务端口无效：${PORT}" ;; esac
+[ "$PORT" -ge 1 ] && [ "$PORT" -le 65535 ] || fail "服务端口需在 1~65535 之间，当前为 ${PORT}。"
+
+CONCURRENCY="${wizard_ipmi_concurrency:-16}"
+SENSOR_INTERVAL="${wizard_sensor_interval:-30}"
+RETENTION_DAYS="${wizard_metric_retention_days:-180}"
+LOG_LEVEL="${wizard_log_level:-info}"
+GEOIP_ENABLE="${wizard_geoip_enable:-true}"
+
+case "$CONCURRENCY" in ''|*[!0-9]*) fail "IPMI 采集并发数必须为数字，当前为 ${CONCURRENCY}。" ;; esac
+[ "$CONCURRENCY" -ge 1 ] && [ "$CONCURRENCY" -le 256 ] \
+  || fail "IPMI 采集并发数需在 1~256 之间，当前为 ${CONCURRENCY}。"
+
+case "$SENSOR_INTERVAL" in ''|*[!0-9]*) fail "传感器采集周期必须为数字，当前为 ${SENSOR_INTERVAL}。" ;; esac
+[ "$SENSOR_INTERVAL" -ge 10 ] && [ "$SENSOR_INTERVAL" -le 600 ] \
+  || fail "传感器采集周期需在 10~600 秒之间，当前为 ${SENSOR_INTERVAL}。"
+
+case "$RETENTION_DAYS" in ''|*[!0-9]*) fail "聚合指标保留天数必须为数字，当前为 ${RETENTION_DAYS}。" ;; esac
+
+case "$LOG_LEVEL" in
+  debug|info|warn|error) : ;;
+  *) fail "日志级别只能是 debug / info / warn / error，当前为 ${LOG_LEVEL}。" ;;
+esac
+
+case "$GEOIP_ENABLE" in
+  true|false) : ;;
+  *) fail "GeoIP 开关只能是 true / false，当前为 ${GEOIP_ENABLE}。" ;;
+esac
+
+log_msg "配置校验通过：port=${PORT} concurrency=${CONCURRENCY} interval=${SENSOR_INTERVAL}s retention=${RETENTION_DAYS}d level=${LOG_LEVEL} geoip=${GEOIP_ENABLE}"
+exit 0

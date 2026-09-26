@@ -1,0 +1,52 @@
+#!/bin/bash
+# uninstall_callback —— 卸载**后**执行（飞牛调用时机：应用卸载流程结束之后）
+#
+# 飞牛卸载时会删掉 target / tmp / home / etc，但**保留 var 与 shares**（保护用户数据）。
+# 所以「按用户选择删除数据」的清理正落在这里：此时包文件已移除，
+# 剩下的本应用目录（TRIM_PKGVAR 下的 data / logs）才有意义去谈删不删。
+#
+# 与 uninstall_init 的分工：init 只做备份（那时数据还完整），删除推迟到 callback。
+# 反过来做（在 init 里就删用户数据）的话，一旦卸载中途失败，用户面对的是
+# 「应用没装成、数据也没了」，而且没有第二次机会。
+set -u
+
+LOG_DIR="${TRIM_PKGVAR:-}/logs"
+LOG_FILE="${LOG_DIR}/metalwatch.log"
+DATA_DIR="${TRIM_PKGVAR:-}/data"
+KEEP="${wizard_uninstall_keep_data:-true}"
+
+log_msg() {
+  [ -n "${TRIM_PKGVAR:-}" ] || return 0
+  mkdir -p "$LOG_DIR" 2>/dev/null || return 0
+  echo "$(date '+%Y-%m-%d %H:%M:%S') - $1" >> "$LOG_FILE"
+}
+
+# 卸载阶段不再向用户报错（流程已结束，报错只会让人以为卸载失败）：
+# 一律记日志 + 安全退出，宁可少删也不要误删。
+log_msg "卸载后清理：keep_data=${KEEP}"
+
+if [ -z "${TRIM_PKGVAR:-}" ]; then
+  # 没有 TRIM_PKGVAR 就没有可信的删除范围，拒绝在未知路径上执行删除
+  log_msg "WARN: 缺少 TRIM_PKGVAR，跳过数据清理（不做任何删除）"
+  exit 0
+fi
+
+# 1. 运行残留（进程已由平台停掉，这里清 PID 文件与网关 socket）
+rm -f "${TRIM_PKGVAR}/metalwatch.pid" "${TRIM_PKGVAR}/metalwatch.sock" 2>/dev/null
+
+case "$KEEP" in
+  true|TRUE|1|yes)
+    log_msg "用户选择保留数据，${DATA_DIR} 原地保留（重装后可继续使用）"
+    ;;
+
+  *)
+    # 只删本应用自己的目录，绝不动共享目录与其它应用的数据
+    log_msg "用户选择删除数据，清理本应用目录：${DATA_DIR} ${LOG_DIR}"
+    rm -rf "$DATA_DIR" "$LOG_DIR" 2>/dev/null
+    # 目录已空则一并移除（非空即失败，属正常情况，忽略）
+    rmdir "$TRIM_PKGVAR" 2>/dev/null || true
+    log_msg "清理完成"
+    ;;
+esac
+
+exit 0

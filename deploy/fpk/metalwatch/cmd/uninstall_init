@@ -1,5 +1,10 @@
 #!/bin/bash
-# 卸载前：按用户选择处理数据（原生应用，数据全在 TRIM_PKGVAR）
+# uninstall_init —— 卸载**前**执行：按用户选择处理数据（原生应用，数据全在 TRIM_PKGVAR）
+#
+# 本脚本只做备份，**不做删除**：删除用户数据的动作在 uninstall_callback。
+# 理由：飞牛卸载流程中间还会删 target / tmp / home / etc，一旦中途失败，
+# 在 init 阶段就删掉的数据没有任何找回的机会；而备份必须在
+# 「文件还在、数据完整」的此刻做，所以两件事分开在不同 hook 里。
 # 铁律：只清理本应用自己的目录，绝不动共享目录中的其它内容与其它应用数据。
 set -u
 
@@ -39,11 +44,8 @@ case "$KEEP" in
     ;;
   *)
     backup_metadata >> "$TRIM_TEMP_LOGFILE"
-    log_msg "用户选择删除数据，开始清理本应用目录"
-    rm -rf "$DATA_DIR" "$LOG_DIR"
-    rm -f "${TRIM_PKGVAR}/metalwatch.pid" "${TRIM_PKGVAR}/metalwatch.sock"
-    echo "已删除 MetalWatch 运行数据（元数据已备份到共享目录）。" > "$TRIM_TEMP_LOGFILE"
-    log_msg "清理完成"
+    echo "已备份 MetalWatch 元数据到共享目录；数据删除将在卸载流程完成后执行。" > "$TRIM_TEMP_LOGFILE"
+    log_msg "用户选择删除数据：备份已完成，删除交给 uninstall_callback"
     ;;
 esac
 
