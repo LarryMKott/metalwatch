@@ -12,6 +12,11 @@ LOG_FILE="${LOG_DIR}/metalwatch.log"
 PID_FILE="${TRIM_PKGVAR}/metalwatch.pid"
 PORT="${TRIM_SERVICE_PORT:-18080}"
 
+# 运行环境：FPK 部署固定为生产（docs/01 D35）。
+# 显式声明而不是只依赖「存在 TRIM_PKGVAR 即为生产」的兜底判定——
+# 排障时看一眼进程环境就能确认，不必反推判定链路。
+export METALWATCH_ENV=prod
+
 log_msg() {
   mkdir -p "$LOG_DIR" 2>/dev/null
   echo "$(date '+%Y-%m-%d %H:%M:%S') - $1" >> "$LOG_FILE"

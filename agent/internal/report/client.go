@@ -84,8 +84,12 @@ type EnrollResponse struct {
 	Codec      string `json:"codec"`
 }
 
-// Enroll 用一次性注册码换取令牌，并把令牌写入本地文件（0600）。
-func (c *Client) Enroll(ctx context.Context, code string, id model.HostIdentity) (string, error) {
+// Enroll 用一次性注册码换取令牌与 host_id，并把令牌写入本地文件（0600）。
+//
+// 同时返回 host_id：gRPC 通道一直会返回它，此前 JSON 通道把它丢掉了，
+// 导致开发环境走 JSON 通道注册后仍必须手工提供 host_id，
+// 而 gRPC 通道可以无参数启动——两条通道行为不一致。
+func (c *Client) Enroll(ctx context.Context, code string, id model.HostIdentity) (string, int64, error) {
 	body := EnrollRequest{
 		EnrollCode: code, Hostname: id.Hostname, PrimaryIP: id.PrimaryIP,
 		SMBIOSUUID: id.SMBIOSUUID, OSType: id.OSType, OSVersion: id.OSVersion,
@@ -93,21 +97,22 @@ func (c *Client) Enroll(ctx context.Context, code string, id model.HostIdentity)
 	}
 	var resp EnrollResponse
 	if err := c.do(ctx, http.MethodPost, "/api/v1/agent/enroll", "", body, &resp); err != nil {
-		return "", err
+		return "", 0, err
 	}
 	if resp.AgentToken == "" {
-		return "", errors.New("服务端未返回令牌")
+		return "", 0, errors.New("服务端未返回令牌")
 	}
 	c.token = resp.AgentToken
 
 	if path := c.tokenFile(); path != "" {
 		if err := os.MkdirAll(filepath.Dir(path), 0o700); err == nil {
 			if err := os.WriteFile(path, []byte(resp.AgentToken), 0o600); err != nil {
-				return resp.AgentToken, fmt.Errorf("令牌已获取但写入失败（请手工保存）: %w", err)
+				return resp.AgentToken, resp.HostID,
+					fmt.Errorf("令牌已获取但写入失败（请手工保存）: %w", err)
 			}
 		}
 	}
-	return resp.AgentToken, nil
+	return resp.AgentToken, resp.HostID, nil
 }
 
 // ReportPayload 是上报体（字段与 proto 消息一致，便于后续切换编码）。

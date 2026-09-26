@@ -2,8 +2,6 @@ package report
 
 import (
 	"context"
-	"os"
-	"strconv"
 	"time"
 
 	"github.com/LarryMKott/metalwatch/agent/internal/model"
@@ -27,7 +25,11 @@ type Reporter struct {
 }
 
 // NewReporter 构造上报循环，完成依赖注入与参数归一（interval 低于下限时钳到下限）。
-func NewReporter(client *Client, collector Collector, interval time.Duration) *Reporter {
+//
+// hostID 由调用方解析后注入，本包不再自己读环境变量：开发环境的 host_id
+// 可能来自本地凭据文件而非环境变量，凭据来源必须只有一处决策
+// （见 agentcfg.ResolveIdentity）。
+func NewReporter(client *Client, collector Collector, interval time.Duration, hostID int64) *Reporter {
 	if interval < minInterval {
 		interval = minInterval
 	}
@@ -35,7 +37,7 @@ func NewReporter(client *Client, collector Collector, interval time.Duration) *R
 		client:    client,
 		collector: collector,
 		interval:  interval,
-		hostID:    HostIDFromEnv(),
+		hostID:    hostID,
 	}
 }
 
@@ -69,15 +71,4 @@ func (r *Reporter) Run(ctx context.Context) error {
 func (r *Reporter) cycle(ctx context.Context) error {
 	rep, _ := r.collector.Collect(ctx) // 部分失败时仍上报已采集到的数据
 	return r.client.Report(ctx, r.hostID, rep)
-}
-
-// HostIDFromEnv 读取注册时服务端分配的 host_id。
-// 由 systemd EnvironmentFile 或 Windows 服务配置注入；缺失时返回 0，服务端会以 403 提示。
-// 导出是因为心跳也需要同一个 host_id（见 heartbeat.New）。
-func HostIDFromEnv() int64 {
-	v, err := strconv.ParseInt(os.Getenv("METALWATCH_HOST_ID"), 10, 64)
-	if err != nil {
-		return 0
-	}
-	return v
 }

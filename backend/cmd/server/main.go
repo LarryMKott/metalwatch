@@ -45,7 +45,17 @@ import (
 	"github.com/LarryMKott/metalwatch/migrations"
 	"github.com/LarryMKott/metalwatch/pkg/config"
 	"github.com/LarryMKott/metalwatch/pkg/crypto"
+	"github.com/LarryMKott/metalwatch/pkg/env"
 	"github.com/LarryMKott/metalwatch/pkg/logger"
+)
+
+// 开发环境的相对路径约定（相对 backend 工作目录）。
+// 两个都已被 .gitignore 覆盖，不会污染仓库。
+const (
+	// devConfigPath 是开发环境未指定 --config 时自动拾取的样例配置。
+	devConfigPath = "configs/app.yaml"
+	// devDataDir 是开发环境未指定 --data 时的数据目录（与 start-backend 脚本一致）。
+	devDataDir = "tmp-data"
 )
 
 // version 由构建时注入：-ldflags "-X main.version=x.y.z"。
@@ -59,6 +69,12 @@ func main() {
 }
 
 func run() error {
+	// 运行环境先于一切解析：它决定所有「未显式指定」时的默认值（docs/01 D35）。
+	environment, err := env.Resolve(os.Getenv)
+	if err != nil {
+		return err
+	}
+
 	cmd := "serve"
 	args := os.Args[1:]
 	if len(args) > 0 && !strings.HasPrefix(args[0], "-") {
@@ -81,6 +97,18 @@ func run() error {
 		cmd = "migrate"
 	}
 
+	// 区分「用户显式传入」与「flag 默认值」：只有前者才该压过环境默认值。
+	// flag.Visit 只遍历被显式设置过的 flag。
+	given := map[string]bool{}
+	fs.Visit(func(f *flag.Flag) { given[f.Name] = true })
+
+	// 开发环境：未指定配置时拾取样例配置；文件不存在则退回内置默认值。
+	if !given["config"] && environment.IsDev() {
+		if _, statErr := os.Stat(devConfigPath); statErr == nil {
+			*configPath = devConfigPath
+		}
+	}
+
 	cfg, err := config.Load(*configPath)
 	if err != nil {
 		return err
@@ -91,19 +119,36 @@ func run() error {
 	if *logDir != "" {
 		cfg.Server.LogDir = *logDir
 	}
-	if *listen != "" {
-		port, err := portOf(*listen)
-		if err != nil {
-			return err
-		}
-		cfg.Server.Port = port
-	}
+
+	// 数据目录：命令行、环境变量、配置文件都没给时，按运行环境决定。
+	// 生产环境拒绝隐式默认——数据写错位置的代价（写失败 / 被卸载清理）远高于启动报错。
 	if cfg.Server.DataDir == "" {
-		return errors.New("未指定数据目录：请通过 --data 或配置文件 server.data_dir 指定")
+		if environment.IsDev() {
+			cfg.Server.DataDir = devDataDir
+		} else {
+			return fmt.Errorf("生产环境未指定数据目录：请用 --data 指定，或设置 " +
+				"METALWATCH_DATA_DIR / 配置文件 server.data_dir（FPK 下对应 TRIM_PKGVAR/data）")
+		}
 	}
 
+	// 监听地址：生产听所有网卡（由飞牛网关转发）；开发只听本机，避免开发机端口外露。
+	host := ""
+	if environment.IsDev() {
+		host = "127.0.0.1"
+	}
+	if *listen != "" {
+		h, port, listenErr := splitListen(*listen)
+		if listenErr != nil {
+			return listenErr
+		}
+		host, cfg.Server.Port = h, port
+	}
+	addr := net.JoinHostPort(host, strconv.Itoa(cfg.Server.Port))
+
 	log, closeLog, err := logger.New(logger.Options{
-		Level: cfg.Server.LogLevel, LogDir: cfg.Server.LogDir, AlsoStdout: cmd != "serve",
+		Level: cfg.Server.LogLevel, LogDir: cfg.Server.LogDir,
+		// 开发环境日志同时打到终端：否则改完代码要先 tail 文件才知道起没起来。
+		AlsoStdout: cmd != "serve" || environment.IsDev(),
 	})
 	if err != nil {
 		return fmt.Errorf("初始化日志失败: %w", err)
@@ -126,12 +171,16 @@ func run() error {
 
 	switch cmd {
 	case "migrate":
-		log.Info("迁移完成", "applied", applied, "dialect", string(db.Dialect()))
+		log.Info("迁移完成", "applied", applied, "dialect", string(db.Dialect()),
+			"env", environment.Name(), "data_dir", cfg.Server.DataDir)
 		return nil
 	case "agent-code":
+		log.Info("运行环境", "env", environment.Name(), "data_dir", cfg.Server.DataDir)
 		return issueAgentCode(ctx, db, *codeDays, *codeUses, log)
 	case "serve":
-		return serve(ctx, cfg, db, applied, *pidFile, log)
+		return serve(ctx, cfg, db, applied, serveOptions{
+			pidFile: *pidFile, addr: addr, env: environment, configPath: *configPath,
+		}, log)
 	default:
 		return fmt.Errorf("未知子命令 %q（可用: serve / migrate / agent-code）", cmd)
 	}
@@ -163,15 +212,27 @@ func issueAgentCode(ctx context.Context, db *adapter.Store, days, uses int, log 
 	return nil
 }
 
+// serveOptions 聚合 serve 的运行参数（参数较多，聚成对象而非继续拉长参数列表）。
+type serveOptions struct {
+	// pidFile 为 PID 文件路径，FPK 生命周期脚本据此管理进程；开发环境为空。
+	pidFile string
+	// addr 为最终监听地址（host:port），已按运行环境补好默认值。
+	addr string
+	// env 为运行环境，用于启动日志与开发模式横幅。
+	env env.Environment
+	// configPath 为实际使用的配置文件路径，为空表示用的是内置默认值。
+	configPath string
+}
+
 // serve 启动 HTTP 服务并等待退出信号。
 func serve(ctx context.Context, cfg config.Config, db *adapter.Store, applied int,
-	pidFile string, log *slog.Logger) error {
+	opts serveOptions, log *slog.Logger) error {
 
 	if os.Getenv("GIN_MODE") == "" {
 		gin.SetMode(gin.ReleaseMode)
 	}
 
-	hosts := service.NewHostService(db.Hosts(), log)
+	hosts := service.NewHostService(db.Hosts(), log, service.WithAlertReconciler(db.Alerts()))
 	pool := task.NewPool(task.Options{
 		Concurrency:    cfg.Collect.IPMIConcurrency,
 		Timeout:        time.Duration(cfg.Collect.CollectTimeoutSec) * time.Second,
@@ -208,6 +269,10 @@ func serve(ctx context.Context, cfg config.Config, db *adapter.Store, applied in
 	if err := alerts.ReloadRules(ctx); err != nil {
 		log.Warn("告警规则加载失败（可继续启动）", "err", err)
 	}
+	// 通知投递改为有界队列异步执行：webhook 对不可达目标最坏 ~71s/渠道，
+	// 原先同步跑在 Agent 上报协程上，会拖住上报链路、让断网补传越积越多。
+	// 事件一律先落库，队列满时丢弃的只是「外发通知」，WebUI 仍可查。
+	alerts.StartDispatch(ctx, 4, 256)
 
 	// W11：新装环境必须有一个管理员，否则所有管理接口都 401，用户进不去系统
 	if err := service.EnsureFirstAdmin(ctx, db, cfg.Server.DataDir, log); err != nil {
@@ -262,7 +327,7 @@ func serve(ctx context.Context, cfg config.Config, db *adapter.Store, applied in
 	defer stopMaint()
 
 	srv := &http.Server{
-		Addr: fmt.Sprintf(":%d", cfg.Server.Port),
+		Addr: opts.addr,
 		// 明文监听需要 h2c：gRPC 客户端以 HTTP/2 prior-knowledge 建连，
 		// 不包 h2c 的话 HTTP/2 前导（PRI *）会被 gin 当成 HTTP/1.1 请求拒绝（D22）
 		Handler:           h2c.NewHandler(agent.Multiplex(grpcSrv, web.NewRouter(deps)), &http2.Server{}),
@@ -270,23 +335,40 @@ func serve(ctx context.Context, cfg config.Config, db *adapter.Store, applied in
 		IdleTimeout:       120 * time.Second,
 	}
 
-	if pidFile != "" {
-		if err := os.WriteFile(pidFile, []byte(strconv.Itoa(os.Getpid())), 0o640); err != nil {
+	// 先绑定端口、再写 PID 文件。反过来的话，端口被占时（旧实例仍在服务）
+	// 新进程会先用新 PID 覆盖旧文件、随后在失败退出时把它删掉，
+	// 于是 FPK 的 stop/status 找不到在运行的实例 → 误判「已停止」→ 重复启动，
+	// 两个进程写同一数据目录。
+	ln, err := net.Listen("tcp", srv.Addr)
+	if err != nil {
+		return fmt.Errorf("监听 %s 失败: %w", srv.Addr, err)
+	}
+
+	if opts.pidFile != "" {
+		if err := os.WriteFile(opts.pidFile, []byte(strconv.Itoa(os.Getpid())), 0o640); err != nil {
+			_ = ln.Close()
 			return fmt.Errorf("写入 PID 文件失败: %w", err)
 		}
-		defer func() { _ = os.Remove(pidFile) }()
+		defer func() { _ = os.Remove(opts.pidFile) }()
+	}
+
+	// 开发环境把关键信息直接打在终端：没有 FPK 生命周期脚本帮忙提示，
+	// 日志又容易被忽略，「起没起来 / 数据落在哪 / 从哪访问」必须一眼可见。
+	if opts.env.IsDev() {
+		printDevBanner(opts, cfg)
 	}
 
 	errCh := make(chan error, 1)
 	go func() {
 		log.Info("MetalWatch 已启动",
 			"version", version, "listen", srv.Addr,
+			"env", opts.env.Name(),
 			"metadata_driver", string(db.Dialect()),
 			"tsdb_driver", ts.Name(),
 			"grpc_stream", "enabled",
 			"migrations_applied", applied,
 			"data_dir", cfg.Server.DataDir)
-		if err := srv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
+		if err := srv.Serve(ln); err != nil && !errors.Is(err, http.ErrServerClosed) {
 			errCh <- err
 		}
 	}()
@@ -314,6 +396,31 @@ func serve(ctx context.Context, cfg config.Config, db *adapter.Store, applied in
 	}
 	log.Info("已停止")
 	return nil
+}
+
+// printDevBanner 打印开发环境的启动指引。
+//
+// 之所以要横幅而不是只依赖日志：开发环境常年在「改代码 → 重启 → 开浏览器」的循环里，
+// 最耗时的失败模式是「进程起来了但访问的是另一个数据目录 / 另一个端口」。
+func printDevBanner(opts serveOptions, cfg config.Config) {
+	src := "内置默认值（未找到 " + devConfigPath + "）"
+	if opts.configPath != "" {
+		src = opts.configPath
+	}
+	dataDir := cfg.Server.DataDir
+	if abs, err := filepath.Abs(dataDir); err == nil {
+		dataDir = abs
+	}
+
+	w := os.Stderr
+	fmt.Fprint(w, "\n────────────── MetalWatch 开发模式 ──────────────\n")
+	fmt.Fprintf(w, "  环境判定：%s（%s）\n", opts.env.Name(), opts.env.Source())
+	fmt.Fprintf(w, "  配置文件：%s\n", src)
+	fmt.Fprintf(w, "  数据目录：%s\n", dataDir)
+	fmt.Fprintf(w, "  访问地址：http://%s\n", opts.addr)
+	fmt.Fprintf(w, "  签发注册码：go run ./cmd/server agent-code --days 7\n")
+	fmt.Fprintf(w, "  切生产模式：%s=%s（生产环境必须显式指定数据目录）\n", env.Name, env.Prod)
+	fmt.Fprint(w, "────────────────────────────────────────────────\n\n")
 }
 
 // loadMasterKey 加载（必要时生成）凭据加密主密钥：data/secret/master.key，0600（docs/01 D9）。
@@ -363,15 +470,16 @@ func startMaintenance(ctx context.Context, ts adapter.TimeSeriesStore, log *slog
 	return func() { cancel(); <-done }
 }
 
-// portOf 从 "0.0.0.0:18080" 或 ":18080" 中解析端口。
-func portOf(listen string) (int, error) {
-	_, portStr, err := net.SplitHostPort(listen)
+// splitListen 从 "0.0.0.0:18080" / ":18080" / "127.0.0.1:18080" 解析主机与端口。
+// 主机部分保留原样（空字符串代表监听所有网卡），由调用方与运行环境默认值合并。
+func splitListen(listen string) (host string, port int, err error) {
+	host, portStr, err := net.SplitHostPort(listen)
 	if err != nil {
-		return 0, fmt.Errorf("--listen 格式应为 host:port（收到 %q）: %w", listen, err)
+		return "", 0, fmt.Errorf("--listen 格式应为 host:port（收到 %q）: %w", listen, err)
 	}
-	port, err := strconv.Atoi(portStr)
-	if err != nil || port < 1 || port > 65535 {
-		return 0, fmt.Errorf("--listen 端口非法: %q", portStr)
+	p, err := strconv.Atoi(portStr)
+	if err != nil || p < 1 || p > 65535 {
+		return "", 0, fmt.Errorf("--listen 端口非法: %q", portStr)
 	}
-	return port, nil
+	return host, p, nil
 }

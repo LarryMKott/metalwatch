@@ -4,12 +4,18 @@
 # $TRIM_PKGETC/metalwatch.yaml；本文件仅作为开发期样例与字段说明。
 #
 # 优先级：内置默认值 < 本文件 < 环境变量（METALWATCH_*）
+#
+# 运行环境（METALWATCH_ENV，见 docs/01 D35）：
+#   开发环境（dev）未传 --config 时会自动拾取本文件；
+#   生产环境（prod）由 FPK 的 install_callback / config_callback 渲染到 $TRIM_PKGETC/metalwatch.yaml。
 
 server:
   port: 18080                 # 必须与 FPK manifest.service_port 及 app/ui/config 的 port 一致
   timezone: "Asia/Shanghai"
   log_level: "info"           # debug | info | warn | error
-  # data_dir / log_dir 由命令行 --data / --log-dir 注入（对应 TRIM_PKGVAR/data、/logs）
+  # data_dir / log_dir 刻意不在本文件配置：
+  #   生产环境由命令行 --data / --log-dir 注入（对应 TRIM_PKGVAR/data、/logs），缺失即启动失败；
+  #   开发环境未显式指定时落到仓库内 tmp-data/
 
 # ---------------- 存储（默认 SQLite，支持独立部署） ----------------
 db:

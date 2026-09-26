@@ -65,9 +65,11 @@ type Server struct {
 	Port     int    `yaml:"port"`
 	Timezone string `yaml:"timezone"`
 	LogLevel string `yaml:"log_level"`
-	// DataDir 由命令行 --data 覆盖，对应 FPK 的 TRIM_PKGVAR/data。
+	// DataDir 为运行数据目录，来源优先级：--data > METALWATCH_DATA_DIR > 本配置 > 环境默认值。
+	// 生产环境对应 FPK 的 TRIM_PKGVAR/data，必须显式给出（缺失即启动失败）；
+	// 开发环境由 cmd/server 落到仓库内的 tmp-data（见 docs/01 D35）。
 	DataDir string `yaml:"data_dir"`
-	// LogDir 由命令行 --log-dir 覆盖，对应 TRIM_PKGVAR/logs。
+	// LogDir 同上，生产环境对应 TRIM_PKGVAR/logs。
 	LogDir string `yaml:"log_dir"`
 }
 
@@ -110,9 +112,14 @@ type Alert struct {
 }
 
 // Default 返回一套可直接运行的默认配置。
+//
+// DataDir / LogDir 刻意留空，不猜数据该落在哪：由 cmd/server 按运行环境补齐
+// （开发 → 仓库内 tmp-data；生产 → 必须显式指定，否则启动失败）。
+// 给一个看似无害的 "./data" 默认值反而危险——在只读的安装目录下会直接写失败，
+// 在 FPK 里则可能把数据写到会被卸载清理的路径。
 func Default() Config {
 	return Config{
-		Server: Server{Port: 18080, Timezone: "Asia/Shanghai", LogLevel: "info", DataDir: "./data"},
+		Server: Server{Port: 18080, Timezone: "Asia/Shanghai", LogLevel: "info"},
 		DB: DB{
 			Driver:       DriverSQLite,
 			MaxOpenConns: 1,

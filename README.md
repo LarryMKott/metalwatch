@@ -4,7 +4,7 @@
 统一在飞牛 OS 上做资产、曲线、告警与报表。
 
 > **架构一句话**：单进程 Go 服务端（Gin + 可插拔存储，默认 SQLite，**所有数据库都支持独立部署**）+ Vue3 前端
-> + 跨平台 Agent（HTTP/2 + Protobuf）。交付形态是**无容器的 native FPK**：不用容器、不装数据库、不拉镜像。
+> + 跨平台 Agent（gRPC 双向流，与前端 JSON 通道共用单端口分流）。交付形态是**无容器的 native FPK**：不用容器、不装数据库、不拉镜像。
 
 **当前状态**：工程骨架已落地并**通过构建与测试**（详见 `docs/05-记录/01-实测记录.md`）；
 业务功能按 `docs/03-计划/01-开发计划.md` 的 W0–W12 工作流推进。
@@ -34,9 +34,18 @@ make check          # fmt + vet + test + race
 make pb             # 生成 protobuf 代码（需 protoc）
 make fpk            # 产出飞牛 FPK 安装包（需 fnpack）
 
-# 本地运行
-cd backend && go run ./cmd/server serve --config configs/app.yaml --data ./tmp-data
+# 本地运行（开发环境：无参数即可，配置 / 数据目录 / 监听地址都走开发默认值）
+cd backend && go run ./cmd/server
 # → http://127.0.0.1:18080  （/healthz 探针、/api/v1/hosts 资产接口）
+#   数据落在 backend/tmp-data，自动拾取 configs/app.yaml，只监听本机
+
+# 生产环境：必须显式给出数据目录，否则拒绝启动
+cd backend && go run ./cmd/server serve --data /path/to/data --listen 0.0.0.0:18080
+
+# Windows 一键启动（幂等：缺二进制自动构建 / 端口或进程已占用自动跳过）
+deploy\script\start-backend.bat    # 后端 :18080（数据目录 backend\tmp-data）
+deploy\script\start-frontend.bat   # 前端 :5173（首次自动 npm install）
+deploy\script\start-agent.bat      # 本机 Agent gRPC 流模式（需已注册）
 
 # 签发 Agent 注册码（明文只出现一次）
 cd backend && go run ./cmd/server agent-code --days 7 --uses 1
@@ -52,6 +61,38 @@ go -C backend vet ./...
 go -C backend run ./cmd/server migrate --data ./tmp-data
 ```
 
+## 运行环境（开发 / 生产）
+
+服务端与 Agent 共用同一个全局环境变量 **`METALWATCH_ENV`**（取值 `dev` / `prod`），判定顺序：
+
+| 顺序 | 条件 | 结果 |
+| --- | --- | --- |
+| 1 | `METALWATCH_ENV=dev\|prod` | 按显式取值；**其他值直接报错**，不静默回退 |
+| 2 | 存在 `TRIM_PKGVAR`（飞牛 FPK 注入） | `prod` |
+| 3 | 其余（源码目录里直接跑） | `dev` |
+
+**开发环境：各自 main 处无参数直接运行**
+
+```bash
+cd backend && go run ./cmd/server        # 配置 configs/app.yaml、数据 tmp-data/、只听 127.0.0.1
+cd agent   && go run ./cmd/windows       # spool bin-local/spool，凭据自动读本地
+```
+
+Agent 首次接入需注册一次，之后即可无参数启动：
+
+```bash
+cd backend && go run ./cmd/server agent-code --days 7   # 签发注册码
+cd agent   && go run ./cmd/windows --code <注册码>       # 注册并把凭据写入 agent/bin-local/
+```
+
+**生产环境：只认显式注入**
+
+- 服务端必须给出数据目录（`--data` / `METALWATCH_DATA_DIR` / 配置 `server.data_dir`），
+  缺失即启动失败；监听所有网卡，由飞牛网关转发；
+- Agent 的 `METALWATCH_AGENT_TOKEN` / `METALWATCH_HOST_ID` 必须由服务管理器注入
+  （systemd EnvironmentFile / Windows 服务配置），**不读**本地凭据文件；
+- FPK 的 `cmd/main` 已显式声明 `METALWATCH_ENV=prod`。
+
 ## 技术栈
 
 | 层 | 选型 | 说明 |
@@ -59,7 +100,7 @@ go -C backend run ./cmd/server migrate --data ./tmp-data
 | 服务端 | Go 1.23+，Gin 1.12 | `CGO_ENABLED=0` 静态编译；前端产物 `go:embed` |
 | 存储（可插拔） | 默认 **SQLite**（`modernc.org/sqlite`，纯 Go）；MySQL / PostgreSQL / GBase8s 支持**独立部署** | 通过 `db.driver` + `db.dsn` 切换，业务代码零改动 |
 | 时序（可插拔） | 默认**进程内嵌 TSDB**；Prometheus / VictoriaMetrics / InfluxDB2 支持独立部署 | `timeseries.driver` + `timeseries.endpoint` |
-| Agent 通道 | **HTTP/2 + TLS + Protobuf** | 与前端 JSON 通道严格隔离；proto 见 `backend/proto/agent.proto` |
+| Agent 通道 | **gRPC 双向流 + Protobuf** | 与前端 JSON 通道严格隔离；与 WebUI 共用 18080，按 `Content-Type` 分流（D22）；proto 见 `backend/proto/` |
 | 前端 | Vue 3.5 + Composition API + TS + Vite 8 + Pinia + vue-router + ECharts 6 | `engines: ">=22.12.0 <25"` |
 | 打包 | 飞牛 native FPK（`manifest` + `cmd/` + `wizard/` + `app/server/metalwatch`） | 无容器；`platform=x86`，ARM 另出包 |
 
@@ -69,7 +110,7 @@ go -C backend run ./cmd/server migrate --data ./tmp-data
 | --- | --- | --- | --- |
 | sqlite | 元数据 | 内嵌 | ✅ 可用（默认） |
 | postgres / mysql / gbase8s | 元数据 | 独立部署 | 规划中（W1c / W2） |
-| embedded | 时序 | 内嵌 | 规划中（W1b） |
+| embedded | 时序 | 内嵌 | ✅ 可用（默认，W1c 自研分块压缩） |
 | prometheus / victoriametrics / influxdb2 | 时序 | 独立部署 | 规划中（W1c / W2） |
 
 切换到外部数据库时，开发验证环境一键起：`docker compose -f deploy/docker/docker-compose.dev.yml up -d`
@@ -102,10 +143,13 @@ go -C backend run ./cmd/server migrate --data ./tmp-data
 | `docs/04-部署/` | FPK 打包与真机验证 |
 | `docs/05-记录/` | 实测记录 |
 
-## 下一步（对应 `docs/03-计划/01-开发计划.md` §7）
+## 下一步
 
-1. `make pb` 打通 Protobuf 编解码，Agent 通道由 JSON 兼容切换为二进制；
-2. W1b 落地内嵌 TSDB（写入队列 + rollup + retention），补齐 `metalwatch_up` 与曲线查询；
-3. W4/W5 采集落地：IPMI 池接入真实 BMC、Linux Agent 采集项补齐（`smartctl` 内置）；
-4. W11 鉴权与审计（当前管理接口**尚未接鉴权**，仅限内网使用）；
-5. 真机验证 V1–V3（静态二进制可运行 / 进程写权限 / 卸载重装数据恢复）——打包链路命门。
+进度与缺口以 [`docs/03-计划/02-进度看板.md`](docs/03-计划/02-进度看板.md) 为准
+（§6 已知缺口与风险、§7 下一步建议顺序）——此处不再重复维护，以免两处说法漂移。
+
+当前主线：
+
+1. **W12 收尾**：装 `fnpack` 产出 `.fpk` → 上飞牛真机验证三项（静态二进制运行 / package 用户写权限 / 重装数据恢复）；
+2. **W15 BMC 管控后端接入**（proto + `pkg/ipmi` + 前端页面已就绪，缺服务端接线）；
+3. **W9 巡检报表**（XLSX 优先）。
