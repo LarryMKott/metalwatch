@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """端点覆盖率登记：服务端 REST 端点清单 + 命中统计。
 
 ENDPOINTS 是「已实现端点」的单一事实来源（与 backend/api/web/router.go 同步维护）。

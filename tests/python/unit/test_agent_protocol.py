@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """单元测试 · Agent 接入协议（M4/W3 JSON 通道）：注册、上报校验、幂等、心跳。
 
 测试数据隔离：每个用例经 SQLite 直写种子注册码，注册出的主机用后即删
@@ -7,8 +6,8 @@
 import uuid
 
 import pytest
-
 from mw import client, config, db
+
 
 def _now():
     import time
@@ -54,7 +53,7 @@ def test_enroll_once_then_reuse_denied(admin):
     status, first = _enroll(code)
     assert status == 201
     try:
-        status, body = _enroll(code, hostname="second-host")
+        status, _body = _enroll(code, hostname="second-host")
         assert status == 401
     finally:
         admin("DELETE", f"/api/v1/hosts/{first['host_id']}")
@@ -121,10 +120,10 @@ def test_report_accept_and_replay_dedup(enrolled):
         "collected_at": _now(),
         "metrics": [{"name": "cpu_temp_celsius", "labels": {"chip": "CPU"}, "value": 41.5}],
     }
-    status, first = client.call("POST", "/api/v1/agent/report", token=token,
+    _status, first = client.call("POST", "/api/v1/agent/report", token=token,
                                 body=payload, expect=202)
     assert first["accepted"] == 1 and first["tsdb"] == "accepted"
-    status, replay = client.call("POST", "/api/v1/agent/report", token=token,
+    _status, replay = client.call("POST", "/api/v1/agent/report", token=token,
                                  body=payload, expect=202)
     assert replay["accepted"] == 0 and replay["tsdb"] == "deduplicated"
 
@@ -157,7 +156,7 @@ def test_enroll_empty_uuid_creates_host(admin):
 def test_report_empty_metrics_accepted(enrolled):
     """边界：空指标列表合法上报，accepted=0 且在线状态照常刷新。"""
     host_id, token = enrolled
-    status, resp = client.call("POST", "/api/v1/agent/report", token=token, body={
+    _status, resp = client.call("POST", "/api/v1/agent/report", token=token, body={
         "batch_id": "py-empty-" + uuid.uuid4().hex[:8], "host_id": host_id,
         "collected_at": _now(), "metrics": []}, expect=202)
     assert resp["accepted"] == 0
@@ -165,7 +164,8 @@ def test_report_empty_metrics_accepted(enrolled):
 
 def test_report_protobuf_content_type_501(enrolled):
     """协议演进：protobuf 通道尚未启用，必须 501 而非误解析。"""
-    import urllib.request, json as _json
+    import json as _json
+    import urllib.request
     host_id, token = enrolled
     req = urllib.request.Request(config.BASE_URL + "/api/v1/agent/report",
                                  data=_json.dumps({"batch_id": "p", "host_id": host_id}).encode(),
@@ -183,7 +183,7 @@ def test_report_protobuf_content_type_501(enrolled):
 def test_report_wrong_method_404(enrolled):
     """边界：GET 上报端点不存在（gin 方法树隔离）。"""
     import urllib.request
-    host_id, token = enrolled
+    _host_id, token = enrolled
     req = urllib.request.Request(config.BASE_URL + "/api/v1/agent/report",
                                  headers={"Authorization": "Bearer " + token})
     try:
@@ -197,7 +197,7 @@ def test_report_wrong_method_404(enrolled):
 def test_report_invalid_json_4xx(enrolled):
     """异常处理：非法 JSON 体应 4xx，不得 500。"""
     import urllib.request
-    host_id, token = enrolled
+    _host_id, token = enrolled
     req = urllib.request.Request(config.BASE_URL + "/api/v1/agent/report",
                                  data=b"{not-json", method="POST")
     req.add_header("Content-Type", "application/json")

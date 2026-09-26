@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """mw —— MetalWatch Python 测试辅助库。
 
 为三层测试（冒烟 / 单元 / 集成）提供可复用的能力：

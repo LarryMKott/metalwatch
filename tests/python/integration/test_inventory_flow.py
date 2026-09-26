@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """集成测试 · 资产快照与变更检测（W2/W18）：
 
 经 gRPC 流上行 AssetSnapshot（Go 探针子进程）→ 指纹 diff →
@@ -12,8 +11,7 @@ import time
 import uuid
 
 import pytest
-
-from mw import client, db, config
+from mw import client, config, db
 
 
 def _go_available():
@@ -46,7 +44,9 @@ def test_asset_snapshot_change_flow(admin, enrolled_host):
         ["go", "run", "./devtools/streamprobe",
          "-server", config.BASE_URL, "-token", token,
          "-host", str(host_id), "-slot", slot, "-base", str(base_ms)],
-        cwd=config.REPO_ROOT / "backend", capture_output=True, text=True, timeout=60)
+        # check=False：退出码由下面显式断言，这里要让 stderr 能被读出来
+        cwd=config.REPO_ROOT / "backend", capture_output=True, text=True,
+        timeout=60, check=False)
     assert proc.returncode == 0, f"探针失败: {proc.stderr}"
 
     # 部件树：基线部件在场，探针内存条已确认移除

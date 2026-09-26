@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """集成测试 · 端到端数据流（G2 门禁的 Python 版）：
 
 注册（SQLite 种子注册码）→ JSON 上报 → 时序落库 → 曲线查询 → 批次重放幂等 → 清理。
@@ -8,7 +7,6 @@ import time
 import uuid
 
 import pytest
-
 from mw import client, db
 from mw.allure_support import step
 
@@ -40,7 +38,7 @@ def test_report_query_dedup_flow(enrolled_host):
         {"name": "voltage_volts", "labels": {"rail": "12V"}, "value": 12.1},
     ]
     with step("上报第一批指标（fan_rpm / voltage）"):
-        status, resp = client.call("POST", "/api/v1/agent/report", token=token, body={
+        _status, resp = client.call("POST", "/api/v1/agent/report", token=token, body={
             "batch_id": batch1, "host_id": host_id, "mode": "agent",
             "collected_at": _now(), "metrics": metrics}, expect=202)
         assert resp["accepted"] == 2 and resp["tsdb"] == "accepted"
@@ -67,7 +65,7 @@ def test_report_query_dedup_flow(enrolled_host):
     with step("轮询时序出点并断言曲线契约"):
         points = client.wait_until(two_points, timeout=20, what="fan_rpm 出齐 2 点")
         assert len(points) == 2
-    ts, value = points[-1]
+    _ts, value = points[-1]
     assert value == 1200
 
     # 标签过滤：rail=12V 只命中 voltage 序列

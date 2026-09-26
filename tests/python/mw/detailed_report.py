@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """干系人级详细测试报告生成器。
 
 合并三类数据源：
@@ -66,9 +65,11 @@ def _steps_md(case):
 def build(results: list, steps_dir: Path, coverage: dict, out_html: Path, out_md: Path) -> dict:
     """生成详细报告。results 为 run_tests.parse_junit 的输出列表。"""
     steps_db = load_steps(steps_dir)
-    ts = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    # 显式带时区：不带 tz 的 now() 得到一个「不知道属于哪个时区」的时间，
+    # 报告时间与本机时间对不上时无法判断是时区问题还是时钟问题。
+    ts = datetime.datetime.now(datetime.timezone.utc).astimezone().strftime("%Y-%m-%d %H:%M:%S")
 
-    total = dict(passed=0, failed=0, error=0, skipped=0)
+    total = {"passed": 0, "failed": 0, "error": 0, "skipped": 0}
     for r in results:
         for k in total:
             total[k] += r["counts"][k]
@@ -85,7 +86,7 @@ def build(results: list, steps_dir: Path, coverage: dict, out_html: Path, out_md
             cid = case.get("case_id", "TC-UNREG-000")
             status = c["status"]
             feat = {"smoke": "冒烟", "unit": "单元", "integration": "集成"}.get(r["suite"], r["suite"])
-            stat = feature_stats.setdefault(feat, dict(passed=0, failed=0, error=0, skipped=0))
+            stat = feature_stats.setdefault(feat, {"passed": 0, "failed": 0, "error": 0, "skipped": 0})
             stat[status] = stat.get(status, 0) + 1
 
             failed = status in ("failed", "error")
@@ -187,4 +188,4 @@ def build(results: list, steps_dir: Path, coverage: dict, out_html: Path, out_md
 
     Path(out_html).write_text(html_doc, encoding="utf-8")
     Path(out_md).write_text(md, encoding="utf-8")
-    return dict(pass_rate=pass_rate, total=total)
+    return {"pass_rate": pass_rate, "total": total}

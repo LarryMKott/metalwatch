@@ -1,18 +1,15 @@
-# -*- coding: utf-8 -*-
 """单元测试 · API 开放令牌（W11）：创建只回一次明文、列表、吊销。"""
 import uuid
 
-import pytest
-
 from mw import client, db
 
-UNIQUE = lambda: uuid.uuid4().hex[:10]  # noqa: E731
+UNIQUE = lambda: uuid.uuid4().hex[:10]
 
 
 def test_token_lifecycle(admin):
     """正向生命周期：创建（明文仅此一次）→ 列表可见（无明文）→ 吊销。"""
     name = "py-tok-" + UNIQUE()
-    status, created = admin("POST", "/api/v1/api-tokens",
+    _status, created = admin("POST", "/api/v1/api-tokens",
                             body={"name": name}, expect=(200, 201))
     assert created["token"].startswith("mwo_")
     try:
@@ -41,7 +38,7 @@ def test_token_create_requires_auth():
 def test_token_create_with_scopes_and_expiry(admin):
     """正向：自定义 scopes 与有效期创建，明文只出现一次。"""
     name = "py-tok-scope-" + UNIQUE()
-    status, created = admin("POST", "/api/v1/api-tokens", body={
+    _status, created = admin("POST", "/api/v1/api-tokens", body={
         "name": name, "scopes": "asset:read", "expire_days": 7}, expect=(200, 201))
     assert created["token"].startswith("mwo_")
     try:

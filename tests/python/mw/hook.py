@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """Webhook 接收器：本地 HTTP 服务捕获出站投递，供集成测试断言。"""
 import json
 import subprocess

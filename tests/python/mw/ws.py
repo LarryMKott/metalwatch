@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """最小 WebSocket 客户端（仅客户端侧读帧），用标准库完成握手。
 
 服务端（gorilla/websocket）→ 客户端方向的帧不带掩码；

@@ -7,6 +7,10 @@
 **/cmd/** text eol=lf
 *.sh text eol=lf
 
+# .bat 是 Windows 专用：cmd.exe 解析 if/for/goto 块对行尾敏感，
+# 全仓库的 LF 规则在这里属于误伤。仓库内仍按 LF 存储，检出时转成 CRLF。
+*.bat text eol=crlf
+
 # 二进制
 *.png binary
 *.PNG binary

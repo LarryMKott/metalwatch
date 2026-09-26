@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """单元测试 · 时序查询接口（W1c）：参数验证与曲线契约。
 
 只读测试：消费本机 Agent 已写入的 up 指标；无 Agent 时跳过数据断言。
@@ -6,8 +5,6 @@
 import time
 
 import pytest
-
-from mw import client, config
 
 
 def _iso(offset_sec=0):
@@ -61,13 +58,13 @@ def test_up_metric_curve(admin, agent_info):
     assert body["source"] == "embedded"
     assert "downsampled" in body
     assert body["points"], "Agent 在线时 up 指标应有数据点"
-    ts, value = body["points"][-1]
+    _ts, value = body["points"][-1]
     assert value == 1.0
 
 
 def test_labels_filter_no_match(admin):
     """标签过滤：不存在的标签组合返回空 points 而非报错。"""
-    status, body = admin("GET",
+    _status, body = admin("GET",
                          "/api/v1/hosts/1/metrics?metric=up&labels=device:nope",
                          expect=200)
     assert body["points"] == []
@@ -75,13 +72,13 @@ def test_labels_filter_no_match(admin):
 
 def test_metric_nonexistent_host_empty(admin):
     """行为记录：时序接口不校验主机存在性——不存在的 host_id 返回 200 空点（W1c 设计取舍）。"""
-    status, body = admin("GET", "/api/v1/hosts/999999/metrics?metric=up", expect=200)
+    _status, body = admin("GET", "/api/v1/hosts/999999/metrics?metric=up", expect=200)
     assert body["points"] == []
 
 
 def test_metric_future_range_empty(admin):
     """边界：查询区间整体位于未来 → 无数据点。"""
-    status, body = admin("GET",
+    _status, body = admin("GET",
                          f"/api/v1/hosts/1/metrics?metric=up&from={_iso(7200)}&to={_iso(14400)}",
                          expect=200)
     assert body["points"] == []
@@ -91,7 +88,7 @@ def test_metric_long_range_downsampled(admin, agent_info):
     """聚合档切换：>24h 区间响应 downsampled=true（数据回退 raw 降采样）。"""
     if agent_info is None:
         pytest.skip("本机 Agent 未部署")
-    status, body = admin("GET",
+    _status, body = admin("GET",
                          f"/api/v1/hosts/1/metrics?metric=up&from={_iso(-30*3600)}&to={_iso(60)}",
                          expect=200)
     assert body["downsampled"] is True

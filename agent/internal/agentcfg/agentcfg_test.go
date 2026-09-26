@@ -68,6 +68,43 @@ func TestResolveServer(t *testing.T) {
 	}
 }
 
+// NewStore 必须拒绝「没有上级目录」的 spool：filepath.Dir 会得到 "."，
+// 凭据就写进了进程当前工作目录（Windows 服务的 CWD 常是 System32），
+// 表现为「注册成功但下次启动说没注册」。
+func TestNewStoreRejectsSpoolWithoutParent(t *testing.T) {
+	for _, bad := range []string{"", "   ", "spool", "./spool", string(filepath.Separator) + "spool"} {
+		if _, err := NewStore(bad); err == nil {
+			t.Errorf("spool=%q 没有上级目录，应被拒绝却通过了", bad)
+		}
+	}
+
+	store, err := NewStore("bin-local/spool")
+	if err != nil {
+		t.Fatalf("正常的相对路径不应被拒: %v", err)
+	}
+	if store.Dir() != "bin-local" {
+		t.Fatalf("凭据目录应为 spool 的父目录，实际 %q", store.Dir())
+	}
+}
+
+// Windows 默认 spool 取 %ProgramData%，而不是硬编码 C:\：系统盘不是 C:、
+// 或 ProgramData 被重定向到别的卷时，硬编码会把数据写到不存在/无权限的路径。
+func TestDefaultSpoolDirFollowsProgramData(t *testing.T) {
+	if runtime.GOOS != "windows" {
+		t.Skip("仅 Windows 使用 %ProgramData%")
+	}
+	t.Setenv("ProgramData", `D:\ProgramData`)
+	want := filepath.Join(`D:\ProgramData`, "MetalWatch", "spool")
+	if got := DefaultSpoolDir(); got != want {
+		t.Fatalf("应跟随 %%ProgramData%%, got %q want %q", got, want)
+	}
+
+	t.Setenv("ProgramData", "   ")
+	if got := DefaultSpoolDir(); got != `C:\ProgramData\MetalWatch\spool` {
+		t.Fatalf("环境变量缺失/空白应退回内置默认值，实际 %q", got)
+	}
+}
+
 func TestStoreSaveLoadRoundTrip(t *testing.T) {
 	spool := filepath.Join(t.TempDir(), "bin-local", "spool")
 	want := Credentials{Token: "tok-1", HostID: 12, Server: "http://127.0.0.1:18080"}

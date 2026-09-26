@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """冒烟测试：系统核心路径快速验证（目标 < 5 分钟，实际秒级）。
 
 通过标准：服务在跑、能登录、核心只读接口 200、本机 Agent 在线。
@@ -7,13 +6,12 @@
 import socket
 
 import pytest
-
 from mw import client, config
 
 
 def test_01_healthz():
     """存活探针：服务端健康且双存储正常。"""
-    status, body = client.call("GET", "/healthz", expect=200)
+    _status, body = client.call("GET", "/healthz", expect=200)
     assert body["status"] == "ok"
     assert body["storage"]["metadata"]["driver"] == "sqlite"
     assert body["storage"]["tsdb"]["driver"] == "embedded"
@@ -23,7 +21,7 @@ def test_02_login_and_me(admin_password):
     """鉴权主路径：登录 → me 返回管理员身份。"""
     token = client.login(password=admin_password)
     assert token
-    status, me = client.call("GET", "/api/v1/auth/me", token=token, expect=200)
+    _status, me = client.call("GET", "/api/v1/auth/me", token=token, expect=200)
     assert me["username"] == "admin"
 
 

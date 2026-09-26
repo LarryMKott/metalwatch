@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """Allure 支撑层：优雅降级封装。
 
 allure-pytest 已安装 → 提供装饰器/步骤/附件的真实实现；

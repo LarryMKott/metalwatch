@@ -8,6 +8,7 @@ package agentcfg
 import (
 	"fmt"
 	"os"
+	"path/filepath"
 	"runtime"
 	"strconv"
 	"strings"
@@ -36,6 +37,12 @@ const devSpoolDir = "bin-local/spool"
 // Linux 落 /var/lib：跟随 systemd 服务的 StateDirectory 习惯。
 func DefaultSpoolDir() string {
 	if runtime.GOOS == "windows" {
+		// 取 %ProgramData% 而不是硬编码 C:\：系统盘不是 C:（或 ProgramData 被
+		// 重定向到别的卷）时，硬编码会把数据写到不存在或无权限的路径上。
+		// 环境变量缺失才退回默认值，保证函数始终有可用返回。
+		if base := strings.TrimSpace(os.Getenv("ProgramData")); base != "" {
+			return filepath.Join(base, "MetalWatch", "spool")
+		}
 		return `C:\ProgramData\MetalWatch\spool`
 	}
 	return "/var/lib/metalwatch-agent/spool"

@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """Webhook 捕获服务（由 hook.WebhookReceiver 以子进程方式拉起）。
 
 记录每次 POST 的关键头与请求体，回 204；GET /__ping 用于就绪探测。

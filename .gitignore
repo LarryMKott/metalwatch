@@ -41,7 +41,9 @@ ci-data/
 bin-local/
 
 # 临时探针的编译产物（源码在 backend/devtools/ 下，正常入库）
+# 两条都要：Windows 产物带 .exe，Linux/macOS 产物无扩展名（实测曾漏进 `streamprobe`）
 streamprobe.exe
+devtools/**/streamprobe
 
 # 无依赖的脚本目录里被误生成的 npm 锁文件
 deploy/script/package-lock.json

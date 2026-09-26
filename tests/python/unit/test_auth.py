@@ -1,11 +1,10 @@
-# -*- coding: utf-8 -*-
 """单元测试 · 鉴权接口（W11）：登录、会话、登出、改密、审计。
 
 测试数据隔离：不修改管理员口令（只验证错误路径）；审计断言只读。
 """
 import uuid
 
-from mw import client, db
+from mw import client
 
 
 def test_login_wrong_password_401(admin_password):
@@ -24,7 +23,7 @@ def test_login_missing_fields_422():
 
 def test_me_returns_admin(admin):
     """正向路径：me 返回当前会话身份。"""
-    status, body = admin("GET", "/api/v1/auth/me", expect=200)
+    _status, body = admin("GET", "/api/v1/auth/me", expect=200)
     assert body["username"] == "admin"
     assert body["role"] == "admin"
 
@@ -37,7 +36,7 @@ def test_me_without_token_401():
 
 def test_logout_ok(admin):
     """登出返回 200（无状态令牌，服务端记审计后由客户端丢弃）。"""
-    status, body = admin("DELETE", "/api/v1/auth/logout", expect=200)
+    _status, body = admin("DELETE", "/api/v1/auth/logout", expect=200)
     assert body["ok"] is True
 
 
@@ -66,7 +65,7 @@ def test_login_empty_username_4xx():
 
 def test_audit_logs_filter_by_result(admin):
     """过滤条件：result=denied 只返回失败审计（可空集），结构完整。"""
-    status, body = admin("GET", "/api/v1/audit-logs?result=denied&limit=10", expect=200)
+    _status, body = admin("GET", "/api/v1/audit-logs?result=denied&limit=10", expect=200)
     items = body["items"] if isinstance(body, dict) else body
     for row in items:
         assert row["result"] == "denied"

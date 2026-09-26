@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """pytest 共享夹具：环境配置、管理员会话、覆盖率登记。
 
 前置条件（缺失时相关用例自动跳过/报错提示）：
@@ -8,7 +7,6 @@
 import json
 
 import pytest
-
 from mw import caseregistry, client, endpoints
 from mw import config as mw_config
 from mw.allure_support import ALLURE_AVAILABLE, auto_meta
@@ -19,8 +17,8 @@ _allure_env = {"base_url": mw_config.BASE_URL}
 
 @pytest.fixture(scope="session")
 def env():
-    """全局配置命名空间。"""
-    return config
+    """全局配置命名空间（mw.config）。"""
+    return mw_config
 
 
 @pytest.fixture(autouse=True)
@@ -45,7 +43,6 @@ def _allure_auto_meta(request):
 def _dump_steps(node, module, name, meta, steps):
     """把用例的实际执行步骤写入报告目录（详细报告的数据源）。"""
     import hashlib
-    import pathlib
     doc = (node.function.__doc__ or "").strip().splitlines()
     payload = {
         "nodeid": node.nodeid,
@@ -115,7 +112,6 @@ def pytest_sessionfinish(session, exitstatus):
         import pathlib
         import platform
         props = pathlib.Path(alluredir) / "environment.properties"
-        import sys as _sys
         info = {
             "base.url": mw_config.BASE_URL,
             "python.version": platform.python_version(),

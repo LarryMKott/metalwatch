@@ -1,7 +1,5 @@
-# -*- coding: utf-8 -*-
 """REST 客户端：基于 urllib 的薄封装，自动登记端点覆盖率命中。"""
 import json
-import re
 import time
 import urllib.error
 import urllib.request

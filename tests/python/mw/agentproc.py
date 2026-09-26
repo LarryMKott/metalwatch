@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """本机 Agent 进程管理：供离线判定集成测试启停 Agent。
 
 仅 Windows 本机场景设计；进程名固定为 agent.exe（bin-local 产物名）。
@@ -13,14 +12,16 @@ _PROC_NAME = "agent.exe"
 
 
 def is_running():
+    # check=False：tasklist 在「无该进程」时返回非 0，这里是查询语义，
+    # 结果由下面的字符串匹配判定，不该由异常来表达。
     out = subprocess.run(["tasklist", "/FI", f"IMAGENAME eq {_PROC_NAME}"],
-                         capture_output=True, text=True).stdout
+                         capture_output=True, text=True, check=False).stdout
     return _PROC_NAME.lower() in out.lower()
 
 
 def stop():
     subprocess.run(["taskkill", "/F", "/IM", _PROC_NAME],
-                   capture_output=True, text=True)
+                   capture_output=True, text=True, check=False)
     deadline = time.time() + 5
     while time.time() < deadline and is_running():
         time.sleep(0.2)
@@ -33,12 +34,14 @@ def start(server_url=None, interval="15s"):
     env["METALWATCH_AGENT_TOKEN"] = token
     env["METALWATCH_HOST_ID"] = str(config.AGENT_HOST_ID)
     config.AGENT_SPOOL.mkdir(parents=True, exist_ok=True)
-    log = open(config.AGENT_SPOOL / "agent-pytest.log", "ab")
-    proc = subprocess.Popen(
-        [str(config.AGENT_EXE), "--server", server_url or config.BASE_URL,
-         "--spool", str(config.AGENT_SPOOL), "--interval", interval],
-        env=env, stdout=log, stderr=subprocess.STDOUT,
-        creationflags=subprocess.CREATE_NO_WINDOW)
+    # 用 with 打开日志：Popen 在启动时就把句柄复制给了子进程，父进程这侧不该留着
+    # 不放 —— 原先每次 start() 都泄漏一个文件描述符。
+    with open(config.AGENT_SPOOL / "agent-pytest.log", "ab") as log:
+        proc = subprocess.Popen(
+            [str(config.AGENT_EXE), "--server", server_url or config.BASE_URL,
+             "--spool", str(config.AGENT_SPOOL), "--interval", interval],
+            env=env, stdout=log, stderr=subprocess.STDOUT,
+            creationflags=subprocess.CREATE_NO_WINDOW)
     time.sleep(1)
     if proc.poll() is not None:
         raise RuntimeError("Agent 进程启动即退出，请检查日志 " + str(config.AGENT_SPOOL))

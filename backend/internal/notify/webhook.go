@@ -120,26 +120,58 @@ func New(repo *adapter.NotifyChannelRepo, alerts *adapter.AlertEventRepo, log *s
 
 // AlertEvent 向全部启用的 webhook 渠道投递事件。
 // 渠道按 min_severity 过滤；低于门槛记 skipped。投递结果回写渠道与事件。
+//
+// 事件级结果取本轮所有渠道里**最差**的那个（失败 > 已发送 > 已跳过），且在
+// 全部渠道处理完后只回写一次：逐个渠道回写会让最后一个渠道的结果覆盖前面的，
+// 多渠道场景下「A 失败、B 成功」会被记成 sent，失败就此静默消失。
+// 没有任何可用渠道时记 skipped —— 没送出去不等于送成功。
 func (n *Notifier) AlertEvent(ctx context.Context, p *EventPayload) {
 	channels, err := n.repo.ListWebhook(ctx)
 	if err != nil {
 		n.log.Error("读取通知渠道失败", "err", err)
 		return
 	}
+	overall := stateSkipped
 	for _, ch := range channels {
 		if !severityAtLeast(p.Severity, ch.MinSeverity) {
 			n.markChannel(ctx, &ch, "skipped: severity below "+ch.MinSeverity)
-			n.markEvent(ctx, p, "skipped")
 			continue
 		}
 		if err := n.deliver(ctx, ch, p); err != nil {
 			n.log.Warn("webhook 投递失败", "channel", ch.Name, "event", p.Event, "err", err)
 			n.markChannel(ctx, &ch, "failed: "+err.Error())
-			n.markEvent(ctx, p, "failed")
+			overall = worseState(overall, stateFailed)
 			continue
 		}
 		n.markChannel(ctx, &ch, "ok")
-		n.markEvent(ctx, p, "sent")
+		overall = worseState(overall, stateSent)
+	}
+	n.markEvent(ctx, p, overall)
+}
+
+// notify_state 取值（docs/03 §1.3）。
+const (
+	stateSent    = "sent"
+	stateFailed  = "failed"
+	stateSkipped = "skipped"
+)
+
+// worseState 返回两个投递结果里更严重的那个，用于多渠道聚合。
+func worseState(a, b string) string {
+	if stateRank(b) > stateRank(a) {
+		return b
+	}
+	return a
+}
+
+func stateRank(s string) int {
+	switch s {
+	case stateFailed:
+		return 2
+	case stateSent:
+		return 1
+	default: // skipped / 未知取值一律当最轻
+		return 0
 	}
 }
 

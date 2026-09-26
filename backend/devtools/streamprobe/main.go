@@ -23,7 +23,11 @@ import (
 )
 
 func main() {
-	server := flag.String("server", "http://127.0.0.1:18080", "服务端地址（http 明文 / https TLS）")
+	// 默认端口必须与 FPK 生产端口（18080）错开：开发机上同时跑着生产后端时，
+	// 拿这个默认值执行会把「探针内存条」当成真实资产写进生产库。
+	// 不加 //go:build tag 是刻意的——加了它就会退出 `go vet ./...` 与日常构建的
+	// 视野，工具烂掉了也没人会知道；风险靠这条默认值和「需显式传 token/host」共同兜住。
+	server := flag.String("server", "http://127.0.0.1:18081", "服务端地址（http 明文 / https TLS）")
 	token := flag.String("token", "", "Agent Bearer 令牌")
 	hostID := flag.Int64("host", 0, "主机 ID")
 	slot := flag.String("slot", "", "探针内存条槽位名（每次运行唯一）")

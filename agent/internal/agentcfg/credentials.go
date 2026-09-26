@@ -46,11 +46,24 @@ type Store struct {
 }
 
 // NewStore 由 spool 目录推导凭据目录：取其父目录。
+//
+// 拒绝「不含目录成分」的 spool（如 --spool spool）：filepath.Dir 会得到 "."，
+// 凭据就写进了进程当前工作目录 —— Windows 服务的 CWD 常是 System32，
+// 结果是一份没人知道在哪、还可能没权限写的凭据。
+// 这里直接报错而不是替用户挑个位置：位置猜错的代价是「注册成功但下次启动说没注册」，
+// 比启动失败更难查。
 func NewStore(spoolDir string) (*Store, error) {
-	if strings.TrimSpace(spoolDir) == "" {
+	trimmed := strings.TrimSpace(spoolDir)
+	if trimmed == "" {
 		return nil, errors.New("spool 目录为空，无法定位凭据目录")
 	}
-	return &Store{dir: filepath.Dir(spoolDir)}, nil
+	dir := filepath.Dir(trimmed)
+	if dir == "." || dir == "" || dir == string(filepath.Separator) {
+		return nil, fmt.Errorf(
+			"spool 目录 %q 没有上级目录，无法定位凭据目录（请给出完整路径，如 "+
+				"/var/lib/metalwatch-agent/spool）", spoolDir)
+	}
+	return &Store{dir: dir}, nil
 }
 
 // Dir 返回凭据目录，便于日志与排障时告知用户凭据在哪。

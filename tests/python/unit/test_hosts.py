@@ -1,15 +1,10 @@
-# -*- coding: utf-8 -*-
 """单元测试 · 资产 CRUD（W1a/W8）：输入验证、唯一冲突、分页与生命周期。
 
 测试数据隔离：每个用例用 uuid 后缀的主机名，finally 级清理删除。
 """
 import uuid
 
-import pytest
-
-from mw import client
-
-UNIQUE = lambda: uuid.uuid4().hex[:10]  # noqa: E731
+UNIQUE = lambda: uuid.uuid4().hex[:10]
 
 
 def _create(admin, **overrides):

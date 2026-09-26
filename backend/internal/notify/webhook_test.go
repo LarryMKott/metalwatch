@@ -165,4 +165,45 @@ func TestWebhookSeverityGate(t *testing.T) {
 	}
 }
 
+// 多渠道时事件级结果取最差：一路成功、一路失败必须记 failed。
+// 旧实现逐个渠道回写 notify_state，最后处理的渠道覆盖前面 ——
+// 失败会因为「另一个渠道成功了」而被静默抹平。
+func TestWebhookAggregatesWorstStateAcrossChannels(t *testing.T) {
+	s := newStore(t)
+	ctx := context.Background()
+
+	ok := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusNoContent)
+	}))
+	t.Cleanup(ok.Close)
+	// 127.0.0.1:1 必然拒绝连接，拿到确定的传输错误
+	dead := "http://127.0.0.1:1/hook"
+
+	if err := s.NotifyChannels().SeedWebhook(ctx, "ok-chan", `{"url":"`+ok.URL+`"}`, "info"); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.NotifyChannels().SeedWebhook(ctx, "dead-chan", `{"url":"`+dead+`"}`, "info"); err != nil {
+		t.Fatal(err)
+	}
+
+	hostID := newHost(t, s, "node-agg")
+	if _, _, err := s.Alerts().UpsertFiring(ctx, &adapter.AlertEvent{
+		HostID: ptr(hostID), Severity: "critical", Category: "sensor",
+		Title: "聚合测试", FirstSeenAt: time.Now().UTC(), LastSeenAt: time.Now().UTC(),
+	}, "k-agg", "2026-09-22T00:00:00Z"); err != nil {
+		t.Fatal(err)
+	}
+	rows, _, _ := s.Alerts().List(ctx, adapter.AlertFilter{})
+	p := samplePayload(rows[0].ID, "critical")
+
+	n := notify.New(s.NotifyChannels(), s.Alerts(), slog.New(slog.NewTextHandler(io.Discard, nil)))
+	n.SetRetries([]time.Duration{0}) // 失败即失败，不拖慢用例
+	n.AlertEvent(ctx, p)
+
+	rows, _, _ = s.Alerts().List(ctx, adapter.AlertFilter{})
+	if rows[0].NotifyState != "failed" {
+		t.Fatalf("多渠道部分失败应记 failed, got %s", rows[0].NotifyState)
+	}
+}
+
 func ptr(v int64) *int64 { return &v }

@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """MetalWatch Python 测试执行器。
 
 用法（在 tests/python/ 目录下）：
@@ -23,6 +22,7 @@ import argparse
 import datetime
 import glob
 import json
+import os
 import shutil
 import smtplib
 import subprocess
@@ -37,19 +37,50 @@ REPORTS = HERE / "reports"
 SUITES = ("smoke", "unit", "integration")
 
 
-def run_suite(name: str, fast: bool, allure_dir: Path = None) -> Path:
-    """跑一层测试，返回 JUnit XML 路径。"""
+def local_now() -> datetime.datetime:
+    """当前本地时间（带时区）。
+
+    报告文件名与报告头用本地时间最好读；显式带 tz 是因为不带 tz 的 now()
+    在跨机器比对报告时间时无法解释——分不清是时区差异还是时钟差异。
+    """
+    return datetime.datetime.now(datetime.timezone.utc).astimezone()
+
+
+def run_suite(name: str, fast: bool, allure_dir: "Path | None" = None) -> tuple:
+    """跑一层测试，返回 (JUnit XML 路径, pytest 退出码)。"""
     junit = REPORTS / f"junit_{name}.xml"
+    # 先删旧结果再跑：pytest 根本没起来（未装 / 解释器失败 / XML 写不进去）时不会覆盖它，
+    # 留着就会被下面当成本轮结果解析 —— 上一轮的绿灯冒充本轮通过。
+    junit.unlink(missing_ok=True)
     args = [sys.executable, "-m", "pytest", name, "-q",
             "--junitxml", str(junit), "--rootdir", str(HERE)]
     if allure_dir is not None:
         args += ["--alluredir", str(allure_dir)]
     if fast:
         args += ["-m", "not slow"]
-    proc = subprocess.run(args, cwd=HERE)
+    # check=False：退出码要连同 XML 一起判断（见 gate_problems），不能直接抛
+    proc = subprocess.run(args, cwd=HERE, check=False)
     if not junit.exists():
         raise RuntimeError(f"{name}: 未产生结果文件（pytest 异常退出 {proc.returncode}）")
-    return junit
+    return junit, proc.returncode
+
+
+def gate_problems(name: str, result: dict, returncode: int) -> list:
+    """返回该层的门禁问题（空列表 = 通过）。
+
+    「零失败」不等于「跑过」：`-m "not slow"` 过滤、testpaths 配错、收集阶段
+    导入报错都会得到 0 条用例，此时退出码不是 0 但 failed 计数是 0，
+    只看 failed 就会绿灯空跑（D34 门禁变摆设）。
+    """
+    problems = []
+    counts = result["counts"]
+    if sum(counts.values()) == 0:
+        problems.append(f"{name}: 收集到 0 条用例 —— 过滤器或 testpaths 把所有用例排除了，空跑不算通过")
+    elif counts["failed"] + counts["error"] == 0 and returncode != 0:
+        problems.append(
+            f"{name}: pytest 退出码 {returncode} 但 XML 里 0 失败 —— "
+            "多半在收集阶段就出错（导入错误 / 参数不被识别），本层结果不可信")
+    return problems
 
 
 def parse_junit(xml: Path) -> dict:
@@ -76,7 +107,7 @@ def parse_junit(xml: Path) -> dict:
 
 def coverage_section() -> str:
     """端点覆盖率段落（表格 + 未覆盖清单）。"""
-    from mw import endpoints  # noqa: E402  依赖 repo 布局，延迟导入
+    from mw import endpoints
     s = endpoints.summary(REPORTS / "coverage_hits.json")
     lines = [f"**端点覆盖率：{s['percent']}%**（{s['covered']}/{s['total']}）"]
     if s["missing"]:
@@ -85,10 +116,10 @@ def coverage_section() -> str:
     return "\n".join(lines)
 
 
-def build_report(results: list) -> tuple[Path, Path]:
-    """生成 HTML 与 Markdown 报告，返回路径。"""
-    ts = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
-    total = dict(passed=0, failed=0, error=0, skipped=0)
+def build_report(results: list, problems: list = ()) -> tuple[Path, Path]:
+    """生成 HTML 与 Markdown 报告，返回路径。problems 是门禁问题（空跑、结果不可信）。"""
+    ts = local_now().strftime("%Y%m%d_%H%M%S")
+    total = {"passed": 0, "failed": 0, "error": 0, "skipped": 0}
     seconds = 0.0
     for r in results:
         for k in total:
@@ -97,8 +128,12 @@ def build_report(results: list) -> tuple[Path, Path]:
 
     cov = coverage_section()
     md = [f"# MetalWatch 测试报告 {ts}",
-          f"\n总计：✅ {total['passed']} 通过 · ❌ {total['failed']} 失败 · "
-          f"💥 {total['error']} 错误 · ⏭ {total['skipped']} 跳过 · {seconds:.1f}s\n"]
+          (f"\n总计：✅ {total['passed']} 通过 · ❌ {total['failed']} 失败 · "
+           f"💥 {total['error']} 错误 · ⏭ {total['skipped']} 跳过 · {seconds:.1f}s\n")]
+    if problems:
+        md.append("\n> ⛔ **门禁未通过**（控制台同样会打印，退出码为 1）：\n")
+        md += [f"> - {p}" for p in problems]
+        md.append("")
     for r in results:
         md.append(f"\n## {r['suite']}（{r['counts']['passed']} 通过 / "
                   f"{r['counts']['failed']} 失败 / {r['counts']['error']} 错误 / "
@@ -144,28 +179,36 @@ def build_report(results: list) -> tuple[Path, Path]:
 
 
 def notify(md_path: Path, total: dict) -> None:
-    """结果通知：邮件与 Webhook 均按环境变量启用，未配置则跳过。"""
+    """结果通知：邮件与 Webhook 均按环境变量启用，未配置则跳过。
+
+    半套配置必须显式告警：只设了 MW_SMTP_HOST 而漏了收件人时，若静默降级成一行
+    print，值班的人会以为告警已经发出去了 —— 这比「完全没配」更危险。
+    """
     text = md_path.read_text(encoding="utf-8")
     subject = (f"[MetalWatch 测试] 通过 {total['passed']} / 失败 {total['failed']} / "
                f"错误 {total['error']}")
-    smtp_host = __import__("os").environ.get("MW_SMTP_HOST")
-    if smtp_host:
+    smtp_host = os.environ.get("MW_SMTP_HOST")
+    to = os.environ.get("MW_NOTIFY_EMAIL_TO")
+    hook_url = os.environ.get("MW_NOTIFY_WEBHOOK_URL")
+
+    if smtp_host and not to:
+        print("⚠️ 通知：MW_SMTP_HOST 已设置但缺少 MW_NOTIFY_EMAIL_TO，邮件不会发出"
+              "（补上收件人，或清掉 MW_SMTP_HOST 以免误以为已告警）")
+    if smtp_host and to:
         try:
             msg = MIMEText(text, "plain", "utf-8")
             msg["Subject"] = subject
-            msg["From"] = __import__("os").environ.get("MW_SMTP_USER", "metalwatch@localhost")
-            to = __import__("os").environ["MW_NOTIFY_EMAIL_TO"]
+            msg["From"] = os.environ.get("MW_SMTP_USER", "metalwatch@localhost")
             msg["To"] = to
-            with smtplib.SMTP(smtp_host, int(__import__("os").environ.get("MW_SMTP_PORT", 25))) as s:
-                if __import__("os").environ.get("MW_SMTP_USER"):
+            with smtplib.SMTP(smtp_host, int(os.environ.get("MW_SMTP_PORT", "25"))) as s:
+                if os.environ.get("MW_SMTP_USER"):
                     s.starttls()
-                    s.login(__import__("os").environ["MW_SMTP_USER"],
-                            __import__("os").environ.get("MW_SMTP_PASS", ""))
+                    s.login(os.environ["MW_SMTP_USER"],
+                            os.environ.get("MW_SMTP_PASS", ""))
                 s.send_message(msg)
             print(f"通知：邮件已发送至 {to}")
-        except Exception as e:  # 通知失败不影响测试结论
+        except Exception as e:  # noqa: BLE001  通知失败不影响测试结论
             print(f"通知：邮件发送失败（{e}）")
-    hook_url = __import__("os").environ.get("MW_NOTIFY_WEBHOOK_URL")
     if hook_url:
         try:
             body = json.dumps({"msgtype": "text",
@@ -174,7 +217,7 @@ def notify(md_path: Path, total: dict) -> None:
                                          headers={"Content-Type": "application/json"})
             urllib.request.urlopen(req, timeout=10)
             print("通知：Webhook 已推送")
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001  通知失败不影响测试结论
             print(f"通知：Webhook 推送失败（{e}）")
     if not smtp_host and not hook_url:
         print("通知：未配置（MW_SMTP_* / MW_NOTIFY_WEBHOOK_URL）")
@@ -214,25 +257,27 @@ def main():
 
     results = []
     failed = 0
+    problems = []
     for name in names:
         print(f"\n===== {name} =====")
-        junit = run_suite(name, fast=args.fast, allure_dir=allure_dir)
+        junit, returncode = run_suite(name, fast=args.fast, allure_dir=allure_dir)
         r = parse_junit(junit)
         results.append(r)
         failed += r["counts"]["failed"] + r["counts"]["error"]
+        problems += gate_problems(name, r, returncode)
         print(f"{name}: {r['counts']['passed']} 通过 / {r['counts']['failed']} 失败 / "
               f"{r['counts']['error']} 错误 / {r['counts']['skipped']} 跳过（{r['time']}s）")
 
-    total = dict(passed=0, failed=0, error=0, skipped=0)
+    total = {"passed": 0, "failed": 0, "error": 0, "skipped": 0}
     for r in results:
         for k in total:
             total[k] += r["counts"][k]
-    html_path, md_path = build_report(results)
+    html_path, md_path = build_report(results, problems)
 
     # 干系人级详细报告（用例 ID/目标/前置/分步数据/预期/实际/状态/失败日志）
     from mw import detailed_report, endpoints
     cov = endpoints.summary(hits)
-    ts = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+    ts = local_now().strftime("%Y%m%d_%H%M%S")
     detailed_report.build(results, steps_dir, cov,
                           REPORTS / f"detailed_report_{ts}.html",
                           REPORTS / "latest_detailed.md")
@@ -247,8 +292,9 @@ def main():
         allure_bin = shutil.which("allure")
         if allure_bin:
             out = REPORTS / "allure-report"
+            # check=False：allure 只是渲染交互式报告，失败不影响测试结论
             subprocess.run([allure_bin, "generate", str(allure_dir),
-                            "-o", str(out), "--clean"], capture_output=True)
+                            "-o", str(out), "--clean"], capture_output=True, check=False)
             if (out / "index.html").exists():
                 print(f"Allure 报告：{out / 'index.html'}（allure open {out} 查看）")
         else:
@@ -256,8 +302,10 @@ def main():
                   "`allure serve tests/python/reports/allure-results` 查看交互式报告")
 
     print(f"\n报告：{html_path}\n摘要：{md_path}")
+    for p in problems:
+        print(f"⛔ 门禁：{p}")
     notify(md_path, total)
-    sys.exit(1 if failed else 0)
+    sys.exit(1 if failed or problems else 0)
 
 
 def rename_from_docstring(allure_dir: Path) -> None:

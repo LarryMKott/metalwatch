@@ -54,6 +54,11 @@ func Resolve(getenv Getenv) (Environment, error) {
 		getenv = os.Getenv
 	}
 
+	// 纯空白按「未设置」处理，而不是「非法值」：环境里出现 `METALWATCH_ENV= `
+	// 多半是脚本变量展开了个空（`METALWATCH_ENV=$X` 而 X 未定义），
+	// 此时报「取值非法」会把「忘了传变量」伪装成「变量写错」，反而更难排查。
+	// 代价是「空白」与「未设置」不再可区分；要区分得改用 os.LookupEnv 语义，
+	// 但那会让这一种情况多出一套分支，收益不抵复杂度 —— 此处刻意合并。
 	raw := strings.TrimSpace(getenv(Name))
 	if raw != "" {
 		switch strings.ToLower(raw) {

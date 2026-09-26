@@ -12,7 +12,10 @@ concurrency:
   cancel-in-progress: true
 
 env:
-  GO_VERSION: '1.23'
+  # 必须 >= 两个 go.mod 的 go 指令（现为 1.25.0）。
+  # 低版本会走 GOTOOLCHAIN=auto 联网隐式拉工具链：构建不可复现，
+  # 且 GOTOOLCHAIN=local 或下载受限时直接失败。
+  GO_VERSION: '1.25'
   CGO_ENABLED: 0
 
 jobs:

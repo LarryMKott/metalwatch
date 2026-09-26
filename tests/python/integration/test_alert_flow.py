@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """集成测试 · 告警闭环（W7 全链路）：
 
 阈值触发（critical）→ 同步落库 → WebSocket 推送 → Webhook 投递（HMAC 签名）
@@ -6,14 +5,13 @@
 
 使用独立注册主机（每次运行唯一），告警去重键互不干扰，可重复执行。
 """
-import hmac
 import hashlib
+import hmac
 import json
 import time
 import uuid
 
 import pytest
-
 from mw import client, db, hook, ws
 from mw.allure_support import step
 

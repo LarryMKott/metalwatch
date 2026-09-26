@@ -26,25 +26,35 @@ import (
 //     新增接口默认受保护，不会因为漏写判断而裸奔
 //   - 审计由中间件统一记录写操作与登录结果
 
-// defaultAdminOnly 是默认的「仅管理员」路由表（method + gin 路由模板）。
+// implementedAdminOnly 是已经挂上路由的「仅管理员」接口表（method + gin 路由模板）。
 // 依据契约权限矩阵：主机增删 / BMC 凭据 / 用户 / Token / 明文导出。
 //
 // ⚠️ 新增高危接口必须在这里登记。授权判定的默认档是「写操作 operator+」，
 // 漏登记的后果是普通 operator 也能改，且不会有任何报错提醒。
-var defaultAdminOnly = map[string]bool{
-	"POST /api/v1/hosts":            true, // 手工录入主机
-	"DELETE /api/v1/hosts/:id":      true,
-	"PUT /api/v1/hosts/:id/bmc":     true, // BMC 凭据（明文口令，必须收口）
-	"DELETE /api/v1/hosts/:id/bmc":  true,
-	"GET /api/v1/users":             true,
-	"POST /api/v1/users":            true,
-	"PUT /api/v1/users/:id":         true,
-	"DELETE /api/v1/users/:id":      true,
-	"GET /api/v1/api-tokens":        true,
-	"POST /api/v1/api-tokens":       true,
-	"DELETE /api/v1/api-tokens/:id": true,
-	"GET /api/v1/audit-logs":        true,
-	"GET /api/v1/assets/export":     true,
+var implementedAdminOnly = map[string]bool{
+	"POST /api/v1/hosts":              true, // 手工录入主机
+	"DELETE /api/v1/hosts/:id":        true,
+	"PUT /api/v1/hosts/:id/bmc":       true, // BMC 凭据（明文口令，必须收口）
+	"DELETE /api/v1/hosts/:id/bmc":    true, // 删除凭据
+	"POST /api/v1/hosts/:id/bmc/test": true, // 用托管的 BMC 凭据对外发起探测，凭据归 admin 管辖
+	"GET /api/v1/api-tokens":          true,
+	"POST /api/v1/api-tokens":         true,
+	"DELETE /api/v1/api-tokens/:id":   true,
+	"GET /api/v1/audit-logs":          true,
+}
+
+// pendingAdminOnly 是契约已定义、代码尚未实现的高危接口。
+//
+// 提前登记而不是等实现时再补：实现的人多半想不起这张表，而漏登记的默认后果是
+// 「普通 operator 可用」——一个不会有任何报错的越权。下面的
+// TestAdminOnlyTableMatchesRegisteredRoutes 会在这些路由真的挂上之后报错，
+// 提醒把条目搬进 implementedAdminOnly，表因此不会长期与实际路由脱节。
+var pendingAdminOnly = map[string]bool{
+	"GET /api/v1/users":         true,
+	"POST /api/v1/users":        true,
+	"PUT /api/v1/users/:id":     true,
+	"DELETE /api/v1/users/:id":  true,
+	"GET /api/v1/assets/export": true,
 }
 
 // defaultPublicRoutes 是默认的免鉴权路由：登录必须公开，否则无人能拿到令牌。
@@ -94,9 +104,30 @@ func NewAuthenticator(cfg AuthConfig) *Authenticator {
 		store:        cfg.Store,
 		log:          log,
 		guard:        authz.NewLoginGuard(),
-		adminOnly:    defaultAdminOnly,
+		adminOnly:    implementedAdminOnly,
 		publicRoutes: defaultPublicRoutes,
 	}
+}
+
+// AdminOnlyRoutes 返回本实例生效的「仅管理员」路由表副本。
+//
+// 导出是为了让装配方与测试能核对「表里登记的路由是否真的存在」。返回副本而不是
+// 原表：调用方拿到的是视图，改它不该影响鉴权行为。
+func (a *Authenticator) AdminOnlyRoutes() map[string]bool {
+	return cloneRoutes(a.adminOnly)
+}
+
+// PendingOnlyRoutes 返回契约已定义但尚未实现的高危路由副本，供一致性测试比对。
+func (a *Authenticator) PendingOnlyRoutes() map[string]bool {
+	return cloneRoutes(pendingAdminOnly)
+}
+
+func cloneRoutes(src map[string]bool) map[string]bool {
+	out := make(map[string]bool, len(src))
+	for k, v := range src {
+		out[k] = v
+	}
+	return out
 }
 
 // Middleware 返回挂到 /api/v1 组上的处理器。

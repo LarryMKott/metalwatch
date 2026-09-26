@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """单元测试 · 带外管理接口（W4）：凭据录入校验、加密落库断言、连通性测试。
 
 D9 硬性要求断言：密码明文不得出现在 bmc_credential 密文字段。
@@ -8,10 +7,9 @@ D9 硬性要求断言：密码明文不得出现在 bmc_credential 密文字段�
 import uuid
 
 import pytest
+from mw import db
 
-from mw import client, db
-
-UNIQUE = lambda: uuid.uuid4().hex[:10]  # noqa: E731
+UNIQUE = lambda: uuid.uuid4().hex[:10]
 
 
 @pytest.fixture()
@@ -43,7 +41,7 @@ def test_put_bmc_input_validation(admin, host):
 def test_credential_encrypted_at_rest(admin, host):
     """D9 验收：密码明文不出现在密文字段；密文随 AAD 绑定不可跨主机使用（示意）。"""
     secret = "S3cret-" + UNIQUE()
-    status, _ = admin("PUT", f"/api/v1/hosts/{host}/bmc", body={
+    _status, _ = admin("PUT", f"/api/v1/hosts/{host}/bmc", body={
         "bmc_ip": "10.80.0.9", "username": "admin", "password": secret}, expect=204)
     cred = db.bmc_credential(host)
     assert cred is not None
@@ -67,7 +65,7 @@ def test_delete_credential(admin, host):
     status, _ = admin("DELETE", f"/api/v1/hosts/{host}/bmc")
     assert status == 204
     assert db.bmc_credential(host) is None
-    status, body = admin("DELETE", f"/api/v1/hosts/{host}/bmc")
+    status, _body = admin("DELETE", f"/api/v1/hosts/{host}/bmc")
     assert status == 404
 
 
@@ -80,14 +78,14 @@ def test_collect_runs_endpoint(admin):
 
 def test_put_bmc_missing_host_404(admin):
     """边界：为不存在的主机录入凭据应 404。"""
-    status, body = admin("PUT", "/api/v1/hosts/999999/bmc", body={
+    status, _body = admin("PUT", "/api/v1/hosts/999999/bmc", body={
         "bmc_ip": "10.80.0.9", "username": "u", "password": "p"})
     assert status == 404
 
 
 def test_put_bmc_ipv6_and_redfish(admin, host):
     """边界：IPv6 BMC 地址与 redfish 协议均为合法输入。"""
-    status, _ = admin("PUT", f"/api/v1/hosts/{host}/bmc", body={
+    _status, _ = admin("PUT", f"/api/v1/hosts/{host}/bmc", body={
         "bmc_ip": "fe80::1", "username": "u", "password": "p", "protocol": "redfish"},
         expect=204)
     cred = db.bmc_credential(host)

@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """集成测试 · Agent 离线判定（W7/M3 验收 3）：
 
 停止本机 Agent → 超 2×采集周期未上报 → 置 offline + agent_offline 告警；
@@ -8,7 +7,6 @@
 标注 slow：真实等待离线窗口，约 3 分钟。
 """
 import pytest
-
 from mw import agentproc, client, config, db
 from mw.allure_support import step
 

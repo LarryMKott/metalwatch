@@ -1,8 +1,5 @@
-# -*- coding: utf-8 -*-
 """单元测试 · 告警中心接口（W7）：模板、查询参数验证、确认幂等。"""
-import pytest
 
-from mw import client
 
 
 def test_templates_shape(admin):
@@ -35,7 +32,7 @@ def test_alerts_list_all_shape(admin):
 
 def test_ack_missing_alert_404(admin):
     """边界：确认不存在的告警返回 404。"""
-    status, body = admin("POST", "/api/v1/alerts/99999999/ack")
+    status, _body = admin("POST", "/api/v1/alerts/99999999/ack")
     assert status == 404
 
 
@@ -50,11 +47,11 @@ def test_state_filters_disjoint(admin):
 
 def test_alerts_severity_filter(admin):
     """过滤条件：severity=bogus 为未知级别 → 空列表而非报错（行为记录）。"""
-    status, body = admin("GET", "/api/v1/alerts?state=all&severity=bogus", expect=200)
+    _status, body = admin("GET", "/api/v1/alerts?state=all&severity=bogus", expect=200)
     assert isinstance(body, list) and body == []
 
 
 def test_alerts_host_id_non_numeric_ignored(admin):
     """边界：host_id 非数字时被忽略（不过滤），返回正常列表结构。"""
-    status, body = admin("GET", "/api/v1/alerts?state=all&host_id=abc", expect=200)
+    _status, body = admin("GET", "/api/v1/alerts?state=all&host_id=abc", expect=200)
     assert isinstance(body, list)

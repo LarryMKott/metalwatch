@@ -1,6 +1,5 @@
-# -*- coding: utf-8 -*-
 """单元测试 · 系统状态与实时推送握手（W7/W11）。"""
-from mw import client, endpoints, ws, config
+from mw import endpoints, ws
 
 
 def test_system_status_shape(admin):
