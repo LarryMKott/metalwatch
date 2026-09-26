@@ -82,14 +82,20 @@ func (h *Hub) Register(v1 *gin.RouterGroup) {
 }
 
 // serve 完成协议升级后进入双泵循环：读泵仅用于感知断开，写泵转发广播。
+//
+// ⚠️ 订阅必须**先于**握手登记。客户端一收到 101 就认为订阅已生效，
+// 若先 Upgrade 再 subscribe，两者之间的广播会因 clients 里还没有它而被静默丢弃
+// （实测 Dial 返回后立刻广播有 ~16% 丢失，e2e 用例偶发「未收到 WS 推送」的根因）。
+// 顺序反过来后，「Dial 返回」即蕴含「已订阅」，不再有丢事件的窗口。
 func (h *Hub) serve(c *gin.Context) {
+	ch := h.subscribe()
+
 	conn, err := upgrader.Upgrade(c.Writer, c.Request, nil)
 	if err != nil {
-		return // Upgrade 已写过错误响应
+		h.unsubscribe(ch) // Upgrade 已写过错误响应
+		return
 	}
 	defer func() { _ = conn.Close() }()
-
-	ch := h.subscribe()
 	defer h.unsubscribe(ch)
 
 	// 读泵：不消费内容，只为及时感知客户端断开（半开连接兜底）

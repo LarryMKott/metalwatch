@@ -360,6 +360,13 @@ func TestWebSocketAlertPush(t *testing.T) {
 	}
 	t.Cleanup(func() { _ = conn.Close() })
 
+	// 订阅登记先于握手完成（hub.serve 的顺序不变式），所以 Dial 返回即蕴含已订阅。
+	// 这条断言把两类失败分开：订阅没登记（此处立刻暴露）与告警没触发（下面的读超时）。
+	// 否则前者会伪装成 5s 读超时，排查时误导方向。
+	if n := env.hub.ClientCount(); n != 1 {
+		t.Fatalf("WS 已连上但订阅数为 %d，订阅登记未生效", n)
+	}
+
 	// 3. 上报两批 90℃（间隔 3 分钟）→ critical 新触发 → 广播
 	now := time.Now().UTC().Truncate(time.Minute)
 	for i, at := range []time.Time{now.Add(-3 * time.Minute), now} {
@@ -381,7 +388,7 @@ func TestWebSocketAlertPush(t *testing.T) {
 	_ = conn.SetReadDeadline(time.Now().Add(5 * time.Second))
 	_, msg, err := conn.ReadMessage()
 	if err != nil {
-		t.Fatalf("未收到 WS 推送: %v", err)
+		t.Fatalf("未收到 WS 推送（当前订阅数=%d）: %v", env.hub.ClientCount(), err)
 	}
 	var payload struct {
 		Event    string `json:"event"`
