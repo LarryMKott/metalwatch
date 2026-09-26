@@ -4,8 +4,9 @@
 #   make pb        生成 protobuf 代码
 #   make web       构建前端（Vue3 + Vite）
 #   make build     构建服务端二进制（前端产物 go:embed 进二进制）
-#   make test      跑单测 + 竞态检测
-#   make check     格式化 + vet + lint + test 一条龙
+#   make test      跑单测（两个 module）
+#   make race      竞态检测（两个 module，需 gcc）
+#   make check     交付前门禁：格式检查 + vet + 单测 + 竞态
 #   make pack      产出飞牛 FPK 安装包
 #
 # 说明：本机（Windows + 受限 shell）下 Makefile 未必可用，等价命令见 README「快速开始」。
@@ -26,7 +27,7 @@ GOPROXY ?= https://goproxy.cn,direct
 export GOPROXY
 export GOSUMDB := off
 
-.PHONY: help pb web build build-agent test race cover vet fmt lint check fpk pack run clean tools
+.PHONY: help pb web build build-agent test race cover vet fmt fmtcheck lint check fpk pack run clean tools
 
 help:
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | awk 'BEGIN{FS=":.*?## "}{printf "  \033[36m%-12s\033[0m %s\n", $$1, $$2}'
@@ -81,12 +82,25 @@ fmt:
 	cd $(BACKEND) && gofmt -s -w .
 	cd $(AGENT) && gofmt -s -w .
 
+## 格式检查（只报告、不改写；门禁必须用这个）
+## 门禁里跑 fmt（-w）会把不合格的地方先改掉再判通过 —— 绿灯是假绿灯，
+## 而且工作区被静默改动，提交时容易夹带。
+fmtcheck:
+	@out=$$(cd $(BACKEND) && gofmt -s -l .); \
+	out2=$$(cd $(AGENT) && gofmt -s -l .); \
+	if [ -n "$$out$$out2" ]; then \
+		echo "以下文件未格式化（先跑 make fmt）："; \
+		printf '%s\n' "$$out" "$$out2" | sed '/^$$/d'; \
+		exit 1; \
+	fi; \
+	echo "格式检查通过（backend + agent）"
+
 ## 静态检查（需先安装 golangci-lint）
 lint:
 	cd $(BACKEND) && golangci-lint run ./...
 
-## 交付前质量门禁
-check: fmt vet test race
+## 交付前质量门禁（与 CI 的覆盖面保持一致：两个 module）
+check: fmtcheck vet test race
 	@echo "==> 质量门禁通过"
 
 ## 打包飞牛 FPK（native 形态）

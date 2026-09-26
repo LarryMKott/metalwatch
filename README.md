@@ -25,10 +25,11 @@ MetalWatch/
 ```bash
 # 后端：构建 / 测试 / 质量门禁（Windows 上若无 make，可逐条执行等价命令）
 make build          # 前端构建 → go:embed → CGO_ENABLED=0 交叉编译服务端
-make test           # go test ./...
-make race           # go test -race ./...（需 CGO/gcc，本机不可用，CI 必跑）
+make test           # go test -count=1 ./...（backend + agent 两个 module）
+make race           # go test -race -count=1 ./...（需 CGO/gcc，本机不可用，CI 必跑）
 make cover          # 覆盖率报告
-make check          # fmt + vet + test + race
+make fmtcheck       # 只报告未格式化的文件，不改写（门禁用这个）
+make check          # fmtcheck + vet + test + race（交付前门禁）
 
 # 端到端
 make pb             # 生成 protobuf 代码（需 protoc）
