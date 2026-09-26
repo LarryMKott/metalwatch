@@ -3,6 +3,28 @@
 本文件由 `deploy/tools/gen_release_notes.py` 自动生成，请勿手工编辑已发布版本的内容。
 提交信息请遵循[约定式提交](https://www.conventionalcommits.org/zh-hans/)。
 
+## MetalWatch v0.2.1
+
+> 📅 发布日期：2026-09-26 · 🔢 提交数量：2 · 👥 贡献者：YiDaZhang
+
+### ✨ 新功能
+
+- **release**: 发布正文携带本次修改记录——分组提交日志自动生成 (9d622c1)
+
+### 📝 文档
+
+- **changelog**: 累积 v0.2.0 变更日志 (65c5c0f)
+
+---
+
+**安装（飞牛 fnOS）**：下载与应用架构一致的 FPK —— x86 设备用 `metalwatch-fpk-x86_64-0.2.1.fpk`、ARM 设备用 `metalwatch-fpk-arm64-0.2.1.fpk`，在应用中心手动安装。
+**安装（二进制）**：其他部署方式按平台下载 `metalwatch-server-*` 与 `metalwatch-agent-*`，WebUI 为 `metalwatch-webui-0.2.1.tar.gz`（解压后由服务端托管）。
+**校验（SHA-256）**：下载附件 `SHA256SUMS`，与资产放在同一目录后执行 `sha256sum -c SHA256SUMS`（Windows 可用 `certutil -hashfile <文件> SHA256` 逐个对照）。
+**变更范围**：8744d20ca254a4f7f4ea706109866906396e9001..HEAD
+
+<!-- release-baseline: 65c5c0f9120bdfb877aa1150ff28267a3533ad0a -->
+<!-- release-start: 8744d20ca254a4f7f4ea706109866906396e9001 -->
+
 ## MetalWatch v0.2.0
 
 > 📅 发布日期：2026-09-26 · 🔢 提交数量：42 · 👥 贡献者：YiDaZhang
