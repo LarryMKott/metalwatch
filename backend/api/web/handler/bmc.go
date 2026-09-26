@@ -1,9 +1,12 @@
-// bmc.go 承载带外（BMC/IPMI）管理接口（W4）：
+// bmc.go 承载带外（BMC/IPMI）管理接口（W4 / W15）：
 //
 //	PUT    /api/v1/hosts/{id}/bmc       录入/更新凭据（密码 AES-256-GCM 加密落库，明文不落盘）
 //	DELETE /api/v1/hosts/{id}/bmc       移除凭据并停用带外采集
 //	POST   /api/v1/hosts/{id}/bmc/test  连通性测试（读电源状态，最轻量）
 //	GET    /api/v1/collect-runs         采集执行记录（docs/04 §3）
+//	GET    /api/v1/bmc/{id}/capability  能力探测（W15；mc info）
+//	POST   /api/v1/bmc/{id}/command     指令下发：风扇/电源/指示灯/交还自动（W15）
+//	GET    /api/v1/bmc/audit            管控操作审计（W15；最近 N 条）
 //
 // 密码只在请求与内存中出现：日志、DB、错误响应均不含明文（docs/01 D9 硬性要求）。
 package handler
@@ -14,12 +17,14 @@ import (
 	"log/slog"
 	"net"
 	"net/http"
+	"strconv"
 	"strings"
 	"time"
 
 	"github.com/gin-gonic/gin"
 
 	"github.com/LarryMKott/metalwatch/internal/adapter"
+	"github.com/LarryMKott/metalwatch/internal/authz"
 	"github.com/LarryMKott/metalwatch/internal/service"
 	"github.com/LarryMKott/metalwatch/internal/task"
 	"github.com/LarryMKott/metalwatch/pkg/crypto"
@@ -27,24 +32,27 @@ import (
 )
 
 // BMCHandler 承载带外管理接口。
-// masterKey 为凭据加密主密钥（docs/01 D9）；pool/poller 允许为 nil（带外未启用时 test 返回 503）。
+// masterKey 为凭据加密主密钥（docs/01 D9）；pool/poller/ctrl 允许为 nil
+// （带外未启用时 test / 管控接口分别降级）。
 type BMCHandler struct {
 	store     adapter.MetadataStore
 	hosts     *service.HostService // 主机存在性经 service 层校验（404 语义）
 	masterKey []byte
 	pool      *task.Pool
 	poller    *service.IPMIPoller
+	ctrl      *service.BMCControlService // W15 管控；nil 时管控接口返回 503
 	log       *slog.Logger
 }
 
 // NewBMCHandler 构造带外管理处理器。
 func NewBMCHandler(store adapter.MetadataStore, hosts *service.HostService, masterKey []byte,
-	pool *task.Pool, poller *service.IPMIPoller, log *slog.Logger) *BMCHandler {
+	pool *task.Pool, poller *service.IPMIPoller, ctrl *service.BMCControlService,
+	log *slog.Logger) *BMCHandler {
 	if log == nil {
 		log = slog.Default()
 	}
 	return &BMCHandler{store: store, hosts: hosts, masterKey: masterKey,
-		pool: pool, poller: poller, log: log}
+		pool: pool, poller: poller, ctrl: ctrl, log: log}
 }
 
 // Register 挂载本域路由。
@@ -56,6 +64,12 @@ func (h *BMCHandler) Register(v1 *gin.RouterGroup) {
 		g.POST("/:id/bmc/test", h.Test)
 	}
 	v1.GET("/collect-runs", h.ListRuns)
+	v1.GET("/bmc/audit", h.ListBmcAudit)
+	bmc := v1.Group("/bmc")
+	{
+		bmc.GET("/:id/capability", h.BmcCapability)
+		bmc.POST("/:id/command", h.SendBmcCommand)
+	}
 }
 
 // bmcCredentialInput 是凭据录入请求体。
@@ -256,4 +270,112 @@ func (h *BMCHandler) syncTargetsAsync() {
 			h.log.Warn("带外调度目标同步失败", "err", err)
 		}
 	}()
+}
+
+// SendBmcCommand 下发一条管控指令（W15）。同步执行：BMC 指令是亚秒级操作，
+// 同步返回执行结果比「下发后轮询状态」简单且足够。执行失败返回 ok=false 的
+// 200 响应——IPMI 故障是业务结果，不是 API 故障。
+func (h *BMCHandler) SendBmcCommand(c *gin.Context) {
+	if h.ctrl == nil {
+		c.JSON(http.StatusServiceUnavailable, utils.ErrorBody{
+			Code: "bmc_control_disabled", Message: "BMC 管控未启用",
+			RequestID: utils.RequestIDOf(c),
+		})
+		return
+	}
+	id, err := utils.IDParam(c)
+	if err != nil {
+		utils.BadJSON(c, err)
+		return
+	}
+	var in service.BMCCommandInput
+	if err := c.ShouldBindJSON(&in); err != nil {
+		utils.BadJSON(c, err)
+		return
+	}
+	ctx, cancel := utils.Timeout(c, 20*time.Second)
+	defer cancel()
+
+	result, err := h.ctrl.Execute(ctx, id, operatorOf(c), in)
+	if err != nil {
+		utils.Fail(c, err)
+		return
+	}
+	c.JSON(http.StatusOK, result)
+}
+
+// BmcCapability 探测一台主机的 BMC 控制能力（W15）。
+func (h *BMCHandler) BmcCapability(c *gin.Context) {
+	if h.ctrl == nil {
+		c.JSON(http.StatusServiceUnavailable, utils.ErrorBody{
+			Code: "bmc_control_disabled", Message: "BMC 管控未启用",
+			RequestID: utils.RequestIDOf(c),
+		})
+		return
+	}
+	id, err := utils.IDParam(c)
+	if err != nil {
+		utils.BadJSON(c, err)
+		return
+	}
+	ctx, cancel := utils.Timeout(c, 10*time.Second)
+	defer cancel()
+
+	cap, err := h.ctrl.Capability(ctx, id)
+	if err != nil {
+		utils.Fail(c, err)
+		return
+	}
+	c.JSON(http.StatusOK, cap)
+}
+
+// ListBmcAudit 查询管控操作审计（W15；?limit= 默认 100，上限 500）。
+func (h *BMCHandler) ListBmcAudit(c *gin.Context) {
+	ctx, cancel := utils.Timeout(c, 5*time.Second)
+	defer cancel()
+
+	limit := 100
+	if v := c.Query("limit"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil {
+			limit = n
+		}
+	}
+	rows, err := h.store.BMCCommands().List(ctx, limit)
+	if err != nil {
+		utils.Fail(c, err)
+		return
+	}
+	type auditDTO struct {
+		ID        int64  `json:"id"`
+		HostID    int64  `json:"host_id"`
+		HostName  string `json:"host_name,omitempty"`
+		Operator  string `json:"operator"`
+		CmdType   string `json:"cmd_type"`
+		Target    string `json:"target,omitempty"`
+		Params    string `json:"params,omitempty"`
+		Result    string `json:"result"` // success | failed（pending 视为 failed：同步执行下不应存在）
+		CreatedAt string `json:"created_at"`
+	}
+	out := make([]auditDTO, 0, len(rows))
+	for _, r := range rows {
+		result := "failed"
+		if r.Status == "success" {
+			result = "success"
+		}
+		dto := auditDTO{
+			ID: r.ID, HostID: r.HostID, HostName: r.Hostname, Operator: r.Operator,
+			CmdType: r.CmdType, Target: r.Target, Params: r.Params,
+			Result: result, CreatedAt: r.CreatedAt.UTC().Format(time.RFC3339),
+		}
+		out = append(out, dto)
+	}
+	c.JSON(http.StatusOK, gin.H{"items": out, "limit": limit})
+}
+
+// operatorOf 取当前登录用户名；缺失（理论上鉴权中间件保证存在）记 unknown。
+func operatorOf(c *gin.Context) string {
+	if sub := authz.SubjectOf(c); sub != nil {
+		return sub.Username
+	}
+	return "unknown"
 }

@@ -66,7 +66,7 @@ allure serve tests/python/reports/allure-results   # 即时渲染
 ## 报告与通知
 
 - `run_tests.py` 产出 `reports/report_<时间戳>.html`（自包含）+ `reports/latest.md` 摘要；
-- **端点覆盖率**：`mw/endpoints.py` 登记服务端全部 REST 端点（31 个，含内嵌 WebUI 入口），运行时自动统计命中，
+- **端点覆盖率**：`mw/endpoints.py` 登记服务端全部 REST 端点（34 个，含内嵌 WebUI 入口与 BMC 管控），运行时自动统计命中，
   报告给出百分比与未覆盖清单。新增后端路由时须同步登记；
 - 通知按需启用（环境变量，未配置则跳过）：
   - 邮件：`MW_SMTP_HOST` `MW_SMTP_PORT` `MW_SMTP_USER` `MW_SMTP_PASS` `MW_NOTIFY_EMAIL_TO`

@@ -4,6 +4,7 @@ D9 硬性要求断言：密码明文不得出现在 bmc_credential 密文字段�
 连通性测试在本机（无 ipmitool / 无 BMC）预期失败——验证的是
 「凭据已解密、任务池已调度、错误如实返回」的链路。
 """
+import shutil
 import uuid
 
 import pytest
@@ -90,3 +91,62 @@ def test_put_bmc_ipv6_and_redfish(admin, host):
         expect=204)
     cred = db.bmc_credential(host)
     assert cred is not None and cred["protocol"] == "redfish"
+
+
+# ---------------------------------------------------------------------------
+# W15：BMC 管控（capability / command / audit）
+# ---------------------------------------------------------------------------
+
+
+def test_command_input_validation(admin, host):
+    """指令校验：非法 cmd_type / 非法 power_action / 转速越界均 422。"""
+    for bad in (
+        {"cmd_type": "reboot-everything"},
+        {"cmd_type": "power", "power_action": "boom"},
+        {"cmd_type": "fan", "speed_percent": 0, "auto_mode": False},
+        {"cmd_type": "fan", "speed_percent": 101},
+        {"cmd_type": "fan"},
+        {"cmd_type": "identify", "duration_sec": 4000},
+        {"cmd_type": "policy", "target": "magic"},
+    ):
+        status, body = admin("POST", f"/api/v1/bmc/{host}/command", body=bad)
+        assert status == 422 and body["code"] == "invalid_input", \
+            f"{bad} 应 422, got {status}"
+
+
+def test_command_requires_bmc(admin, host):
+    """未配置 BMC 的主机：指令与能力探测均 404。"""
+    status, _ = admin("POST", f"/api/v1/bmc/{host}/command",
+                      body={"cmd_type": "power", "power_action": "on"})
+    assert status == 404
+    status, _ = admin("GET", f"/api/v1/bmc/{host}/capability")
+    assert status == 404
+
+
+def test_command_missing_host_404(admin):
+    """边界：对不存在的主机下发指令应 404。"""
+    status, _ = admin("POST", "/api/v1/bmc/999999/command",
+                      body={"cmd_type": "power", "power_action": "on"})
+    assert status == 404
+
+
+@pytest.mark.skipif(shutil.which("ipmitool") is not None,
+                    reason="本机有 ipmitool 时该用例会真连 BMC（超时慢），交给真机验证")
+def test_command_execution_failure_recorded(admin, host):
+    """无 ipmitool 环境下发指令：HTTP 200 + ok=false（业务失败≠API 失败），
+    审计表留下 failed 记录——执行记录即操作审计（W15 核心语义）。"""
+    admin("PUT", f"/api/v1/hosts/{host}/bmc", body={
+        "bmc_ip": "10.80.0.9", "username": "admin", "password": "x"}, expect=204)
+    status, body = admin("POST", f"/api/v1/bmc/{host}/command",
+                         body={"cmd_type": "fan", "speed_percent": 60})
+    assert status == 200 and body["ok"] is False
+    assert body["request_id"].startswith("bmc-")
+
+    _status, audit = admin("GET", "/api/v1/bmc/audit?limit=50", expect=200)
+    mine = [e for e in audit["items"] if e["host_id"] == host]
+    assert mine, "审计里应有本次失败指令"
+    entry = mine[0]
+    assert entry["result"] == "failed" and entry["cmd_type"] == "fan"
+    assert entry["operator"] and entry["created_at"]
+    for key in ("id", "host_id", "operator", "cmd_type", "result", "created_at"):
+        assert key in entry

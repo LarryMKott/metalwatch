@@ -34,6 +34,10 @@ ENDPOINTS = {
     ("DELETE", "/api/v1/hosts/:id/bmc"),
     ("POST", "/api/v1/hosts/:id/bmc/test"),
     ("GET", "/api/v1/collect-runs"),
+    # BMC 管控（W15）
+    ("GET", "/api/v1/bmc/:id/capability"),
+    ("POST", "/api/v1/bmc/:id/command"),
+    ("GET", "/api/v1/bmc/audit"),
     # 鉴权（W11）
     ("POST", "/api/v1/auth/login"),
     ("DELETE", "/api/v1/auth/logout"),

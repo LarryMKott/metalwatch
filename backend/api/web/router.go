@@ -8,6 +8,7 @@ import (
 	"github.com/LarryMKott/metalwatch/api/agentpb"
 	"github.com/LarryMKott/metalwatch/api/web/handler"
 	"github.com/LarryMKott/metalwatch/internal/app"
+	"github.com/LarryMKott/metalwatch/internal/service"
 	"github.com/LarryMKott/metalwatch/pkg/utils"
 )
 
@@ -40,7 +41,8 @@ func NewRouter(d *app.Deps) *gin.Engine {
 	handler.NewHostHandler(d.Hosts).Register(v1)
 	handler.NewMetricHandler(d.TSDB, d.Store).Register(v1)
 	handler.NewAlertHandler(d.Store).Register(v1)
-	handler.NewBMCHandler(d.Store, d.Hosts, d.MasterKey, d.Pool, d.IPMI, d.Log).Register(v1)
+	handler.NewBMCHandler(d.Store, d.Hosts, d.MasterKey, d.Pool, d.IPMI,
+		service.NewBMCControlService(d.Store, d.MasterKey, nil, d.Log), d.Log).Register(v1)
 	handler.NewAssetHandler(d.Store, d.Hosts).Register(v1)
 
 	// W11：鉴权 / 开放令牌 / 审计

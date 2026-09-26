@@ -26,6 +26,7 @@ type MetadataStore interface {
 	Thresholds() *ThresholdRepo
 	Alerts() *AlertEventRepo
 	BMC() *BMCRepo
+	BMCCommands() *BMCCommandRepo
 	CollectRuns() *CollectRunRepo
 	Components() *ComponentRepo
 	Assets() *AssetRepo
