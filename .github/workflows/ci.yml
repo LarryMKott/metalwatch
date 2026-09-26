@@ -126,7 +126,7 @@ jobs:
   # Agent：测试（宿主机）
   # ============================================================
   agent-test:
-    name: Agent · 测试（vet / 单测）
+    name: Agent · 测试（vet / 单测 / race）
     runs-on: ubuntu-latest
     timeout-minutes: 15
     defaults:
@@ -152,8 +152,14 @@ jobs:
       - name: go vet
         run: go vet ./...
 
-      - name: 单元测试
-        run: go test -count=1 ./...
+      - name: 单元测试（含竞态检测）
+        # ⚠️ CGO_ENABLED 必须为 1：race 检测器依赖 cgo，全局/继承 0 会直接报
+        # "-race requires cgo"。本机（Windows，无 gcc）跑不了 -race，
+        # 这是唯一能覆盖到 agent 侧锁使用的环境 —— session.go 里有
+        # s.mu 保护 gRPC 流的发送路径，D41 修的正是这类问题。
+        env:
+          CGO_ENABLED: '1'
+        run: go test -race -count=1 ./...
 
   # ============================================================
   # Agent：分平台编译（入口按平台分目录：cmd/linux、cmd/windows）

@@ -61,8 +61,9 @@ type Options struct {
 }
 
 // Stream 是一条「采集 → gRPC 双向流」会话：连接管理、断网续传、心跳与下行命令。
-// Run 之外只有一个 collectLoop goroutine 写 spool，Send 全部经互斥锁串行化
-// （grpc.ClientStream 不允许并发 Send）。
+// Run 之外只有一个 collectLoop goroutine 写 spool。**所有 Send 都在 s.mu 下进行**
+// （drain 补传、trySend 实时）—— grpc.ClientStream 不允许跨 goroutine 并发 SendMsg，
+// 动发送路径时必须维持这条不变式。
 type Stream struct {
 	opt       Options
 	collector Collector
@@ -137,11 +138,10 @@ func (s *Stream) serveSession(ctx context.Context) (healthy bool, err error) {
 		s.mu.Unlock()
 	}()
 
-	// 先清积压：按采集时间序补传，失败时未 Ack 的条目留待下轮（at-least-once）
-	if s.opt.Spool != nil {
-		if err := s.replay(sctx, st); err != nil {
-			return false, fmt.Errorf("补传失败: %w", err)
-		}
+	// 先清积压：按采集时间序补传，失败时未 Ack 的条目留待下轮（at-least-once）。
+	// s.st 在上面已发布，所以这里走的是「持锁发送」那条路。
+	if err := s.drain(sctx); err != nil {
+		return false, fmt.Errorf("补传失败: %w", err)
 	}
 	s.opt.Log.Info("gRPC 流已连接，积压已清空", "host_id", s.opt.HostID)
 
@@ -177,8 +177,19 @@ func (s *Stream) serveSession(ctx context.Context) (healthy bool, err error) {
 	}
 }
 
-// replay 把 spool 积压按序补传；批量 Ack，发送失败时未送达部分自动留在队列。
-func (s *Stream) replay(ctx context.Context, st gen.AgentStreamService_StreamClient) error {
+// drain 把 spool 积压按采集时间序补传，成功一批 Ack 一批；返回错误时未 Ack 的
+// 条目留在队列里下轮重发（at-least-once）。未连接时是空操作（连库都不碰）。
+//
+// ⚠️ 整批持 s.mu，这是**规格要求**而不是优化：grpc.ClientStream 不允许跨 goroutine
+// 并发 SendMsg，而补传（会话 goroutine）与实时上报（collectLoop goroutine）会同时
+// 想往同一条流写。持锁同时还有个副作用是好的 —— 补传批次不与实时上报交错，
+// 旧数据始终先发。
+func (s *Stream) drain(ctx context.Context) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.st == nil || s.opt.Spool == nil {
+		return nil
+	}
 	for {
 		items, err := s.opt.Spool.Peek(ctx, replayBatchSize)
 		if err != nil {
@@ -189,8 +200,11 @@ func (s *Stream) replay(ctx context.Context, st gen.AgentStreamService_StreamCli
 		}
 		acked := make([][]byte, 0, len(items))
 		for _, it := range items {
-			if err := st.Send(it.Report); err != nil {
-				_ = s.opt.Spool.Ack(ctx, acked...)
+			if err := s.st.Send(it.Report); err != nil {
+				// 已送达的部分先确认，剩下的留待下轮，避免整批重发
+				if len(acked) > 0 {
+					_ = s.opt.Spool.Ack(ctx, acked...)
+				}
 				return err
 			}
 			acked = append(acked, it.Key)
@@ -219,6 +233,16 @@ func (s *Stream) collectLoop(ctx context.Context) {
 func (s *Stream) collectOnce(ctx context.Context) {
 	rep, _ := s.collector.Collect(ctx) // 部分失败仍上报已采到的数据
 	msg := toProtoReport(rep, model.NewBatchID(), time.Now())
+
+	// 每个采集周期都先把积压带走：连得上时 spool 不该留残条目。
+	// 没有这一刀的话，「读 s.st 时还是 nil、真正落盘却发生在补传最后一次 Peek
+	// 之后」的报文会一直躺在队列里等下次重连 —— 连接稳定时延迟无上界
+	// （CI 上偶发的 `等待超时: spool 清空` 就是这条残留，见 D41）。
+	// 放在实时上报之前，保持「旧数据先发」的采集时间序。
+	if err := s.drain(ctx); err != nil {
+		s.opt.Log.Warn("补传失败，积压留待下轮", "err", err)
+	}
+
 	if s.trySend(msg) {
 		return
 	}

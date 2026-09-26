@@ -13,6 +13,7 @@
 SHELL := /bin/bash
 ROOT  := $(shell pwd)
 BACKEND := $(ROOT)/backend
+AGENT   := $(ROOT)/agent
 FRONTEND := $(ROOT)/frontend
 
 VERSION ?= 0.1.0
@@ -55,13 +56,18 @@ build-agent:
 	done
 	@ls -l $(AGENT_BIN_DIR)
 
-## 单元测试
+## 单元测试（两个 module：backend 与 agent 是独立 module）
+## -count=1 不能省：默认命中缓存会输出 `ok ... (cached)`，把真实失败掩盖过去。
 test:
-	cd $(BACKEND) && go test ./...
+	cd $(BACKEND) && go test -count=1 ./...
+	cd $(AGENT) && go test -count=1 ./...
 
-## 竞态检测（CI 必跑）
+## 竞态检测（CI 必跑；本机需 CGO/gcc）
+## 两个 module 都要跑：agent 的 session.go 里 s.mu 保护着 gRPC 发送路径，
+## 只跑 backend 会漏掉它（D41 修的正是那里的并发问题）。
 race:
-	cd $(BACKEND) && go test -race ./...
+	cd $(BACKEND) && go test -race -count=1 ./...
+	cd $(AGENT) && go test -race -count=1 ./...
 
 ## 覆盖率
 cover:
@@ -69,9 +75,11 @@ cover:
 
 vet:
 	cd $(BACKEND) && go vet ./...
+	cd $(AGENT) && go vet ./...
 
 fmt:
 	cd $(BACKEND) && gofmt -s -w .
+	cd $(AGENT) && gofmt -s -w .
 
 ## 静态检查（需先安装 golangci-lint）
 lint:

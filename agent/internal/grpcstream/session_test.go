@@ -239,3 +239,69 @@ func TestSessionReconnectAfterServerDrop(t *testing.T) {
 		t.Fatal("Run 未随 ctx 退出")
 	}
 }
+
+// TestCollectOnceDrainsBacklogWhenConnected 守住一条不变式：
+// **连接可用时，每个采集周期都要把 spool 积压带走**，而不是只发实时那一条。
+//
+// 反例（修复前）：collectOnce 只 trySend 实时报文，spool 仅在 serveSession 里
+// replay() 排空一次。于是任何「读连接时 s.st 还是 nil、真正落盘却发生在 replay
+// 最后一次 Peek 之后」的报文会一直躺在 spool 里，直到下次重连才被补发 ——
+// 连接稳定时延迟无上界。CI 上偶发的 `session_test.go 等待超时: spool 清空`
+// 就是这条残留在报警（2026-09-26，run 36223226787，重跑即绿）。
+func TestCollectOnceDrainsBacklogWhenConnected(t *testing.T) {
+	ctx := context.Background()
+	sp, err := spool.Open(filepath.Join(t.TempDir(), "spool.db"), spool.Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = sp.Close() })
+
+	// 模拟「上一轮落盘留下的残留」：会话建立之前就已经躺在队列里
+	if err := sp.Enqueue(ctx, reportOf("backlog-1", time.Now().Add(-time.Second))); err != nil {
+		t.Fatal(err)
+	}
+
+	fake := &fakeStreamServer{}
+	h := newStreamHarness(t, fake)
+	st, stCtx, cancel := newTestStream(t, sp, h, nil)
+	t.Cleanup(cancel)
+
+	// 建一条真实流并挂到会话上（等价于 serveSession 里 s.st = st 那一步），
+	// 但**不跑 Run** —— 本用例只考察「一个采集周期」的行为，不掺调度噪声。
+	conn, err := h.dial(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = conn.Close() })
+	client, err := gen.NewAgentStreamServiceClient(conn).Stream(stCtx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	st.mu.Lock()
+	st.st = client
+	st.mu.Unlock()
+	t.Cleanup(func() {
+		st.mu.Lock()
+		st.st = nil
+		st.mu.Unlock()
+	})
+
+	st.collectOnce(ctx) // 一个采集周期
+
+	waitFor(t, 2*time.Second, "积压被本周期补发（spool 清空）", func() bool {
+		n, _ := sp.Len(ctx)
+		return n == 0
+	})
+	// 服务端是异步 Recv，等它把两条都收完再判顺序（不能发送后立刻断言）
+	waitFor(t, 2*time.Second, "服务端收到积压 + 实时共 2 条", func() bool {
+		return fake.reportCount() >= 2
+	})
+
+	got := fake.batches()
+	if len(got) != 2 {
+		t.Fatalf("服务端应收到积压 + 实时共 2 条，实际 %d 条: %v", len(got), got)
+	}
+	if got[0] != "backlog-1" {
+		t.Fatalf("应先补发积压（保持采集时间序），实际首条 = %q（全部: %v）", got[0], got)
+	}
+}
