@@ -112,6 +112,18 @@ Adapter 层实现全部存储（业务对后端零感知）。`internal/app` 是
 - **新表注意 `created_at`**：迁移 DDL **不带 DEFAULT**（跨方言约定），INSERT 必须显式写
   UTC RFC3339 —— 本轮三张表全踩过一次 NOT NULL 失败。
 
+## FPK 构建与验证入口（W12，2026-09-22 定案）
+
+- **构建用 `python deploy/script/build_fpk.py [版本]`**（不是 `build.sh`）。
+  `build.sh` 依赖 `dirname`/`npm`/`sed`，本机 Git Bash 会随机失败；Python 版 21s 跑通全流程。
+- **真机前先跑 `python deploy/tools/smoke_server.py`**：按 `cmd/main` 同款参数拉起真实进程，
+  10 项冒烟（含重启复用数据目录）。它是唯一能抓到 `-trimpath` 产物特有问题（如时区）的手段。
+- **二进制内置 tzdata**（`pkg/config` 空导入 `time/tzdata`）：`-trimpath` 会抹掉 GOROOT，
+  `time.LoadLocation` 无法回退 zoneinfo.zip，飞牛又不一定有 `/usr/share/zoneinfo`。
+  同类"单测全绿但产物必挂"的坑只有实跑能发现。
+- 产物 `deploy/fpk/*/app/server/metalwatch` 已被 .gitignore 忽略（30MB，勿入库）。
+- **WSL 不可用**：`wsl.exe` 在沙箱黑名单里，Linux 产物本机跑不了 → 用 Windows 产物跑同套代码路径。
+
 ## 全量重设计后的架构定案（2026-09-22）
 
 - **Agent 通道 = gRPC 双向流**（`AgentStreamService.Stream/Enroll`），不再是 HTTP/2 + Protobuf 单向上报。
@@ -137,3 +149,36 @@ Adapter 层实现全部存储（业务对后端零感知）。`internal/app` 是
 - `D:\dev\gobin\protoc-gen-go.exe`、`protoc-gen-go-grpc.exe`
 - 生成命令（在 `backend/proto` 目录下执行）：
   `protoc -I . --go_out=gen --go_opt=paths=source_relative --go-grpc_out=gen --go-grpc_opt=paths=source_relative agent.proto bmc.proto mesh.proto`
+
+## 运行环境约定（D35，2026-09-26 起）
+
+- **全局环境变量 `METALWATCH_ENV`**（`dev` / `prod`），两个 module 共用同一个判定逻辑；
+  顺序为「显式取值 > 存在 `TRIM_PKGVAR` 即判 prod > 默认 dev」，非法取值**直接报错不回退**。
+  实现在 `backend/pkg/env`（纯标准库），Agent 经既有 `replace` 复用。
+- **开发环境无参数直接运行**：`cd backend && go run ./cmd/server`（自动拾取 `configs/app.yaml`、
+  数据 `tmp-data/`、只听 127.0.0.1、打印开发横幅）；`cd agent && go run ./cmd/windows`
+  （spool 落 `bin-local/spool`、凭据自动读 `bin-local/credentials.json`，注册一次后免参数）。
+- **生产环境只认显式注入**：服务端缺数据目录即启动失败；Agent **不读**本地凭据文件，
+  靠 systemd EnvironmentFile / Windows 服务配置；FPK `cmd/main` 已 `export METALWATCH_ENV=prod`。
+- 默认路径与凭据来源的唯一出处是 `agent/internal/agentcfg`（`report` 包不再自读环境变量，
+  hostID 由调用方注入）。凭据文件 `credentials.json` 兼容旧的 `token` + `host_id.txt`。
+- **`config.Default()` 的 `DataDir` 是空串**：不要再给它加"看似无害"的默认路径——
+  dev 缺失时补 `tmp-data`，prod 缺失时启动失败，这个判断留在 main。
+- 判定「用户是否显式传了 flag」用 `flag.Visit`，**不要比较 flag 默认值**（巧合相等会误判）。
+- `bin-local/` 已加入 `.gitignore`——内含 Agent 凭据，提交前务必确认未被 `git add`。
+
+## 代码评审结论索引（2026-09-26，全文 `docs/05-记录/02-代码评审-20260926.md`）
+
+对未提交改动全量评审（四路并行子代理 + 逐条回读复核），结论 **2 H / 17 M / 12 L**。
+
+- **两个 H 必须在提交前堵**：① `backend/pkg/env/env_test.go` gofmt 未对齐 → CI `backend`
+  job 第一步 `exit 1`（`ci.yml:33-40`），改动整体无法合并；② `.gitignore` 未忽略 `ci-data/`
+  与 `*.db` → CI 用的 `backend/ci-data/bootstrap_admin.txt` 是**明文管理员口令**，照 CI 命令
+  本地复现后 `git add -A` 即入库。
+- **最值得先修的 4 条 M 都是「改了一半」形态**：`alerting.go:401` 漏回填 id（本次只修了
+  `Evaluate`）；`start-agent.ps1:33` 仍注入 `host_id=1` 覆盖新逻辑；两个平台 main 写盘失败
+  仍报「注册成功」；`credentials.go` 写入非原子且损坏时不降级到 legacy token。
+- **已识别的存量缺陷（不在本轮改动内）**：删除主机不做告警侧收尾 + 告警去重键用 hostname
+  → `CountFiring` 长期虚高、同名主机重建时告警挂到 `host_id=NULL` 的无主行。
+- **复核纠错提醒**：子代理关于 `run_tests.py` 复用旧 JUnit XML 的结论**只对本地成立**
+  （CI 全新 checkout 不受影响）；`adminOnly` 的 5 条死条目不构成安全放行。
