@@ -9,7 +9,13 @@
 流程：前端构建 → Go 静态编译 → 落 app/server → 版本号回写 manifest → 校验骨架 → fnpack 打包
 
 用法：
-  python deploy/script/build_fpk.py [版本号] [--skip-frontend] [--goos linux] [--goarch amd64] [--no-check]
+  python deploy/script/build_fpk.py [版本号] [--skip-frontend] [--goos linux] [--goarch amd64]
+                                    [--platform x86|arm] [--no-check]
+
+多架构：
+  包内含原生二进制，飞牛清单的 platform 必须与二进制架构一致（**不可写 all**）。
+  --platform 缺省按 --goarch 推导（amd64→x86、arm64→arm）；推导表里没有的架构
+  必须显式指定，否则直接报错退出（宁可失败也不要出一个架构标错、装到设备上起不来的包）。
 """
 
 from __future__ import annotations
@@ -27,6 +33,11 @@ BACKEND = ROOT / "backend"
 FRONTEND = ROOT / "frontend"
 FPK = ROOT / "deploy" / "fpk" / "metalwatch"
 OUT_BIN = FPK / "app" / "server" / "metalwatch"
+
+# goarch → manifest.platform 的映射。飞牛清单只认 x86 / arm，**不接受 all**：
+# 包内含原生二进制，标成 all 会让 ARM 设备装到 x86 包然后启动失败。
+# 见 deploy/tools/check_fpk.py 第 6 组断言与 docs/04-部署/01 第 5 节。
+PLATFORM_OF_GOARCH = {"amd64": "x86", "arm64": "arm"}
 
 
 def run(cmd: list[str], cwd: pathlib.Path | None = None, env: dict[str, str] | None = None,
@@ -99,14 +110,35 @@ def build_backend(version: str, goos: str, goarch: str) -> bool:
     return True
 
 
-def sync_version(version: str) -> None:
-    print("==> [3/5] 同步版本号到 manifest")
+def resolve_platform(goarch: str, explicit: str) -> str:
+    """确定 manifest.platform 取值：显式参数优先，否则按 goarch 推导。
+
+    推导不出来时**直接报错退出**，不要回落到 x86 —— 那会产出一个架构标错的包，
+    且 check_fpk.py 只看「有没有二进制」，查不出这种错配。
+    """
+    if explicit:
+        return explicit
+    try:
+        return PLATFORM_OF_GOARCH[goarch]
+    except KeyError:
+        raise SystemExit(
+            f"无法从 --goarch={goarch} 推导 manifest.platform，请显式传 --platform x86|arm"
+            f"（当前映射表覆盖：{sorted(PLATFORM_OF_GOARCH)}）") from None
+
+
+def sync_version(version: str, platform: str) -> None:
+    """把版本号与目标架构写进 manifest。
+
+    必须在 check_fpk 之前调用 —— 校验脚本会核对 platform 与 app/server 下原生
+    二进制的一致性，先写后验才有意义。
+    """
+    print(f"==> [3/5] 同步 manifest（version={version} platform={platform}）")
     mf = FPK / "manifest"
     text = mf.read_text(encoding="utf-8", newline="")
     new = re.sub(r"^version=.*$", f"version={version}", text, count=1, flags=re.M)
+    new = re.sub(r"^platform=.*$", f"platform={platform}", new, count=1, flags=re.M)
     if new != text:
         mf.write_text(new, encoding="utf-8", newline="")
-    print(f"    version={version}")
 
 
 def check() -> bool:
@@ -114,16 +146,30 @@ def check() -> bool:
     return run([sys.executable, str(ROOT / "deploy" / "tools" / "check_fpk.py")], quiet=False) == 0
 
 
-def pack() -> bool:
+def pack(require: bool = False) -> bool:
     print("==> [5/5] fnpack 打包")
+    # 先删旧产物：fnpack 失败时不会覆盖它，留着就会被当成「本轮产物」上报
+    # （与 tests/python/run_tests.py 里 JUnit 旧文件同类的假绿来源）。
+    stale = sorted(FPK.glob("*.fpk"))
+    for f in stale:
+        f.unlink()
+    if stale:
+        print(f"    已清理 {len(stale)} 个旧 .fpk")
     fnpack = shutil.which("fnpack")
     if not fnpack:
-        print("    未找到 fnpack，跳过打包。安装方式见 https://developer.fnnas.com/docs/cli/fnpack/")
+        print("    未找到 fnpack。安装方式见 https://developer.fnnas.com/docs/cli/fnpack/")
+        if require:
+            print("    --require-fnpack 已开启：缺 fnpack 直接判定失败（发布链路必须真出 .fpk）")
+            return False
         print(f"    骨架已就绪：{FPK}（可手动执行 fnpack build）")
         return True
     rc = run([fnpack, "build"], cwd=FPK)
-    for f in sorted(FPK.glob("*.fpk")):
+    produced = sorted(FPK.glob("*.fpk"))
+    for f in produced:
         print(f"    产物 {f.name} {f.stat().st_size} 字节")
+    if rc == 0 and not produced:
+        print("    fnpack 退出码为 0 却没有任何 .fpk 产出 —— 判定失败")
+        return False
     return rc == 0
 
 
@@ -133,7 +179,11 @@ def main() -> int:
     ap.add_argument("--skip-frontend", action="store_true")
     ap.add_argument("--goos", default="linux")
     ap.add_argument("--goarch", default="amd64")
+    ap.add_argument("--platform", default="",
+                    help="manifest.platform（x86/arm）。缺省按 --goarch 推导，推导不出则报错")
     ap.add_argument("--no-check", action="store_true")
+    ap.add_argument("--require-fnpack", action="store_true",
+                    help="缺 fnpack 时判定失败（CI 用；本地开发可不开）")
     args = ap.parse_args()
 
     version = args.version
@@ -141,19 +191,23 @@ def main() -> int:
         m = re.search(r"^version=(.+)$", (FPK / "manifest").read_text(encoding="utf-8"), re.M)
         version = m.group(1).strip() if m else "0.1.0"
 
+    platform = resolve_platform(args.goarch, args.platform)
+
     if not args.skip_frontend and not build_frontend():
         print("前端构建失败")
         return 1
     if not build_backend(version, args.goos, args.goarch):
         print("服务端编译失败")
         return 1
-    sync_version(version)
+    sync_version(version, platform)
     if not args.no_check and not check():
         print("骨架校验失败")
         return 1
-    if not pack():
+    if not pack(args.require_fnpack):
         return 1
     print("\n构建完成：", FPK)
+    for f in sorted(FPK.glob("*.fpk")):
+        print("  ", f)
     return 0
 
 

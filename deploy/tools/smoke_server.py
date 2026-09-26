@@ -10,6 +10,7 @@
 
 用法：
   python deploy/tools/smoke_server.py [--port 18099] [--goos windows] [--goarch amd64]
+  python deploy/tools/smoke_server.py --binary path/to/metalwatch   # 冒烟现成产物（发布链路用）
 """
 
 from __future__ import annotations
@@ -54,6 +55,28 @@ def build(work: pathlib.Path, goos: str, goarch: str, version: str) -> pathlib.P
     return exe
 
 
+def use_existing(path_str: str, work: pathlib.Path) -> pathlib.Path | None:
+    """用现成二进制代替现场编译。
+
+    存在的意义：发布流水线要验证的是**将要交付的那份文件本身**，而不是
+    "拿同一份源码再编译一次的结果"——两者未必等价。本项目就踩过这类坑：
+    `-trimpath` 抹掉 GOROOT 后二进制要靠内置 tzdata 才能解析时区，
+    单测全绿、重新编译的冒烟也全绿，只有拿真产物跑才暴露启动即死。
+
+    从 CI artifact 取回的文件没有可执行位，这里补上。
+    """
+    src = pathlib.Path(path_str).resolve()
+    if not src.is_file():
+        print(f"    指定二进制不存在：{src}")
+        return None
+    dst = work / src.name
+    shutil.copyfile(src, dst)
+    if os.name != "nt":
+        dst.chmod(0o755)
+    print(f"    使用现成二进制 {src.name}（{dst.stat().st_size} 字节）")
+    return dst
+
+
 def http(base: str, method: str, path: str, token: str | None = None, body: dict | None = None):
     data = json.dumps(body).encode() if body is not None else None
     req = urllib.request.Request(base + path, data=data, method=method)
@@ -95,6 +118,8 @@ def main() -> int:
     ap.add_argument("--goos", default="windows" if os.name == "nt" else "linux")
     ap.add_argument("--goarch", default="amd64")
     ap.add_argument("--version", default="0.1.0-smoke")
+    ap.add_argument("--binary", default="",
+                    help="跳过编译，直接冒烟这个现成二进制（发布链路用它验证待交付的产物本身）")
     ap.add_argument("--keep", action="store_true", help="保留本次运行目录便于排查")
     args = ap.parse_args()
 
@@ -107,7 +132,8 @@ def main() -> int:
     logs.mkdir()
     pid_file = work / "metalwatch.pid"
 
-    exe = build(work, args.goos, args.goarch, args.version)
+    exe = use_existing(args.binary, work) if args.binary \
+        else build(work, args.goos, args.goarch, args.version)
     if not exe:
         return 1
 

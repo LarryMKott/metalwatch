@@ -1,27 +1,39 @@
 name: CI
 
-# 本机（Windows）无法运行 `go test -race`（缺 gcc/CGO），因此竞态检测必须在 CI 完成。
+# 定位：只做「测试 + 编译验证」，不发布任何产物（发布见 release.yml）。
+#
+# 为什么这些必须在 CI 跑：本机（Windows）有两件事做不了 ——
+#   1. `go test -race` 需要 cgo/gcc，本机实测 `cgo: C compiler "gcc" not found`；
+#   2. 非 x86 平台的编译回归（本机只能以 Windows 产物跑同一套代码路径代替）。
 on:
   push:
     branches: [main, dev]
   pull_request:
     branches: [main]
+  workflow_dispatch:
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
 env:
-  # 必须 >= 两个 go.mod 的 go 指令（现为 1.25.0）。
-  # 低版本会走 GOTOOLCHAIN=auto 联网隐式拉工具链：构建不可复现，
-  # 且 GOTOOLCHAIN=local 或下载受限时直接失败。
   GO_VERSION: '1.25'
-  CGO_ENABLED: 0
+  # 国内自托管 runner 有代理需要时，只需在仓库变量里设 GOPROXY / GOSUMDB 覆盖，
+  # 不必改 workflow（本机开发用的就是 goproxy.cn + GOSUMDB=off）。
+  GOPROXY: ${{ vars.GOPROXY || 'https://proxy.golang.org,direct' }}
+  GOSUMDB: ${{ vars.GOSUMDB || 'sum.golang.org' }}
+  # ⚠️ CGO_ENABLED 刻意**不**在此全局设 0：
+  # 全局设 0 会让 `go test -race` 直接报 "-race requires cgo"（race 检测器依赖 cgo），
+  # 那条步骤等于永远失败。需要静态二进制的步骤各自单独声明 CGO_ENABLED=0。
 
 jobs:
-  backend:
-    name: 后端（vet / race / cover / build）
+  # ============================================================
+  # 后端：质量门禁（宿主机跑测试）
+  # ============================================================
+  backend-quality:
+    name: 后端 · 质量门禁（fmt / vet / race / 覆盖率）
     runs-on: ubuntu-latest
+    timeout-minutes: 25
     defaults:
       run:
         working-directory: backend
@@ -33,11 +45,11 @@ jobs:
           go-version: ${{ env.GO_VERSION }}
           cache-dependency-path: backend/go.sum
 
-      - name: 格式检查
+      - name: gofmt 格式检查
         run: |
           unformatted=$(gofmt -s -l .)
           if [ -n "$unformatted" ]; then
-            echo "以下文件未格式化："
+            echo "::error::以下文件未格式化（本机执行 `gofmt -s -w .` 修复）："
             echo "$unformatted"
             exit 1
           fi
@@ -45,34 +57,161 @@ jobs:
       - name: go vet
         run: go vet ./...
 
-      - name: 竞态检测（本机不可用，CI 必跑）
-        run: go test -race ./...
+      - name: 竞态检测（需 cgo，本机跑不了）
+        env:
+          CGO_ENABLED: '1'
+        # -count=1 关掉测试结果缓存：默认命中缓存会输出 `ok ... (cached)`，
+        # 把真实的编译/逻辑失败掩盖过去（本机踩过，见 .workbuddy/memory）。
+        run: go test -race -count=1 ./...
 
       - name: 覆盖率
-        run: go test -coverpkg=./... -coverprofile=coverage.out ./... && go tool cover -func=coverage.out | tail -1
-
-      - name: 构建（静态二进制）
-        run: go build -trimpath -ldflags "-s -w" -o bin/metalwatch ./cmd/server
-
-      - name: Agent 模块（独立 module）：vet + 三平台交叉编译
-        working-directory: agent
         run: |
-          go vet ./...
-          mkdir -p bin
-          for t in linux/amd64 linux/arm64 windows/amd64; do
-            os=${t%/*}; arch=${t#*/}; ext=""
-            [ "$os" = "windows" ] && ext=".exe"
-            CGO_ENABLED=0 GOOS=$os GOARCH=$arch go build -trimpath -ldflags "-s -w" \
-              -o "bin/metalwatch-agent-$os-$arch$ext" "./cmd/$os"
-          done
+          go test -coverpkg=./... -coverprofile=coverage.out -count=1 ./...
+          go tool cover -func=coverage.out | tail -1
 
-  frontend:
-    name: 前端（Node 22 / 24 双版本）
+      - name: 上传覆盖率
+        uses: actions/upload-artifact@v4
+        with:
+          name: backend-coverage
+          path: backend/coverage.out
+          if-no-files-found: warn
+
+  # ============================================================
+  # 后端：分平台编译（每个平台一个 job，互不掩盖失败）
+  # ============================================================
+  backend-build:
+    name: 后端 · 交叉编译 ${{ matrix.goos }}/${{ matrix.goarch }}
     runs-on: ubuntu-latest
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # 飞牛 fnOS x86 包用（manifest platform=x86）
+          - { goos: linux, goarch: amd64 }
+          # 飞牛 fnOS ARM 包用（manifest platform=arm）
+          - { goos: linux, goarch: arm64 }
+          # 本机 Windows 开发/冒烟用
+          - { goos: windows, goarch: amd64 }
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          cache-dependency-path: backend/go.sum
+
+      - name: go vet（按目标平台）
+        working-directory: backend
+        env:
+          GOOS: ${{ matrix.goos }}
+          GOARCH: ${{ matrix.goarch }}
+        run: go vet ./...
+
+      - name: 编译静态二进制
+        working-directory: backend
+        env:
+          CGO_ENABLED: '0'
+          GOOS: ${{ matrix.goos }}
+          GOARCH: ${{ matrix.goarch }}
+        run: |
+          mkdir -p bin
+          ext=""
+          [ "$GOOS" = "windows" ] && ext=".exe"
+          go build -trimpath -ldflags "-s -w -X main.version=0.0.0-ci" \
+            -o "bin/metalwatch${ext}" ./cmd/server
+          ls -lh bin/
+
+  # ============================================================
+  # Agent：测试（宿主机）
+  # ============================================================
+  agent-test:
+    name: Agent · 测试（vet / 单测）
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    defaults:
+      run:
+        working-directory: agent
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          cache-dependency-path: agent/go.sum
+
+      - name: gofmt 格式检查
+        run: |
+          unformatted=$(gofmt -s -l .)
+          if [ -n "$unformatted" ]; then
+            echo "::error::以下文件未格式化："
+            echo "$unformatted"
+            exit 1
+          fi
+
+      - name: go vet
+        run: go vet ./...
+
+      - name: 单元测试
+        run: go test -count=1 ./...
+
+  # ============================================================
+  # Agent：分平台编译（入口按平台分目录：cmd/linux、cmd/windows）
+  # ============================================================
+  agent-build:
+    name: Agent · 编译 ${{ matrix.goos }}/${{ matrix.goarch }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { goos: linux, goarch: amd64 }
+          - { goos: linux, goarch: arm64 }
+          - { goos: windows, goarch: amd64 }
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          cache-dependency-path: agent/go.sum
+
+      # vet 也按目标平台跑：能抓出「只在某个平台编译不过」的问题
+      # （本机踩过：把共用函数写进带 //go:build linux 的文件，Windows 构建 undefined）
+      - name: go vet（按目标平台）
+        working-directory: agent
+        env:
+          GOOS: ${{ matrix.goos }}
+          GOARCH: ${{ matrix.goarch }}
+        run: go vet ./...
+
+      - name: 编译 Agent
+        working-directory: agent
+        env:
+          CGO_ENABLED: '0'
+          GOOS: ${{ matrix.goos }}
+          GOARCH: ${{ matrix.goarch }}
+        run: |
+          mkdir -p bin
+          ext=""
+          [ "$GOOS" = "windows" ] && ext=".exe"
+          go build -trimpath -ldflags "-s -w -X main.version=0.0.0-ci" \
+            -o "bin/metalwatch-agent-${GOOS}-${GOARCH}${ext}" "./cmd/${GOOS}"
+          ls -lh bin/
+
+  # ============================================================
+  # 前端：Node 双版本矩阵（package.json 要求 >=22.12.0 <25）
+  # ============================================================
+  frontend:
+    name: 前端 · Node ${{ matrix.node }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
     defaults:
       run:
         working-directory: frontend
     strategy:
+      fail-fast: false
       matrix:
         node: ['22.22', '24.21']
     steps:
@@ -85,25 +224,68 @@ jobs:
           cache-dependency-path: frontend/package-lock.json
 
       - run: npm ci --no-audit --no-fund
+
       - name: 类型检查
         run: npm run type-check
+
       - name: 构建
         run: npm run build
 
-  fpk:
-    name: FPK 骨架校验
+      # 只从 22 那条腿上传，避免两个 artifact 同名互相覆盖
+      - name: 上传前端产物
+        if: matrix.node == '22.22'
+        uses: actions/upload-artifact@v4
+        with:
+          name: webui-dist
+          path: frontend/dist
+          if-no-files-found: error
+
+  # ============================================================
+  # FPK 骨架校验（静态；真出 .fpk 见 release.yml，需 fnpack）
+  # ============================================================
+  fpk-skeleton:
+    name: FPK · 骨架校验
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@v4
+
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
-      - name: 校验骨架（强制文件 / JSON / LF 换行 / 端口一致 / native 形态断言）
+
+      - name: 校验骨架（强制文件 / JSON / LF 换行 / 端口一致 / native 形态 / platform 断言）
         run: python deploy/tools/check_fpk.py
 
-  python-tests:
-    name: Python 三层测试（冒烟 / 单元 / 集成，D34 门禁）
+  # ============================================================
+  # Python 侧：静态检查
+  # ============================================================
+  python-lint:
+    name: Python · ruff 静态检查
     runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      # 钉死版本：仓库里没有 ruff 配置文件（走默认规则集），
+      # 换个 ruff 版本可能因默认规则变化而凭空报错。升级前先本机跑一遍。
+      - run: pip install 'ruff==0.16.7'
+
+      # 范围刻意只覆盖 tests/python：这是**已清到 0 告警**的既有基线（D34 那一轮）。
+      # deploy/ 下仍有 21 条（多为 BLE001 盲兜底异常，属构建脚本里"尽力而为"的清理逻辑），
+      # 把它们一并纳入会让本 job 一上来就红。要么另开一轮把它们按既有约定
+      # （显式 # noqa: BLE001 + 理由）清干净再扩范围，要么维持现状 —— 不要用
+      # --select 之类的方式把它"弄绿"，那等于假装检查过了。
+      - name: ruff check
+        run: ruff check tests/python
+
+  # ============================================================
+  # Python 三层测试（冒烟 / 单元 / 集成）—— D34 门禁
+  # ============================================================
+  python-tests:
+    name: Python · 三层测试（真实服务端）
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
 
@@ -116,14 +298,16 @@ jobs:
         with:
           python-version: '3.12'
 
-      - name: 安装 pytest + allure-pytest
+      - name: 安装测试依赖
         run: pip install pytest allure-pytest
 
       - name: 构建服务端
         working-directory: backend
-        run: go build -o bin/metalwatch ./cmd/server
+        env:
+          CGO_ENABLED: '0'
+        run: go build -trimpath -o bin/metalwatch ./cmd/server
 
-      - name: 启动服务端（全新数据目录）
+      - name: 启动服务端（全新数据目录）并等待就绪
         working-directory: backend
         run: |
           ./bin/metalwatch serve --data ./ci-data --listen 0.0.0.0:18080 &
@@ -140,9 +324,11 @@ jobs:
           MW_DATA_DIR: ${{ github.workspace }}/backend/ci-data
         run: python run_tests.py all --fast
 
+      # 测试失败时报告更要留下 —— 否则拿不到失败详情
       - name: 上传测试报告
         if: always()
         uses: actions/upload-artifact@v4
         with:
           name: python-test-reports
           path: tests/python/reports/
+          if-no-files-found: warn

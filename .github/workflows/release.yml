@@ -1,0 +1,401 @@
+name: Release
+
+# 触发方式：
+#   1. 推 tag：`git tag v0.2.0 && git push origin v0.2.0`
+#   2. 手动触发（Actions → Release → Run workflow），此时会以 HEAD 为准，
+#      若 tag 不存在则由 gh release create 自动创建。
+#
+# 产物矩阵（每个平台单独构建，互不掩盖失败）：
+#
+#   类别        平台                  产物名
+#   ---------   -------------------   --------------------------------------------
+#   服务端      linux/amd64           metalwatch-server-linux-amd64
+#   服务端      linux/arm64           metalwatch-server-linux-arm64
+#   服务端      windows/amd64         metalwatch-server-windows-amd64.exe
+#   Agent       linux/amd64           metalwatch-agent-linux-amd64
+#   Agent       linux/arm64           metalwatch-agent-linux-arm64
+#   Agent       windows/amd64         metalwatch-agent-windows-amd64.exe
+#   飞牛包      x86（amd64）          metalwatch-fpk-x86_64-<版本>.fpk
+#   飞牛包      arm（arm64）          metalwatch-fpk-arm64-<版本>.fpk
+#   WebUI       全平台共用            metalwatch-webui-<版本>.tar.gz
+#   校验和                            SHA256SUMS
+#
+# 命名规则集中在 deploy/tools/collect_release_assets.py，改上传名要同步改那里。
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+    inputs:
+      version:
+        description: '版本号（形如 0.2.0，不带 v 前缀）'
+        required: true
+        type: string
+      draft:
+        description: '先发为草稿，人工确认资产无误后再手动发布'
+        required: false
+        default: false
+        type: boolean
+
+# 创建 Release 需要写权限；其余 job 用默认只读
+permissions:
+  contents: write
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  GO_VERSION: '1.25'
+  # frontend/package.json 要求 >=22.12.0 <25，取 22.x LTS 作为发布基线
+  NODE_VERSION: '22.22'
+  PYTHON_VERSION: '3.12'
+  # fnpack 是飞牛官方打包 CLI，独立二进制、按宿主平台分发（本处固定 linux-amd64）。
+  # 版本钉死：换版本可能改变 .fpk 内部结构，发布产物要可复现。
+  FNPACK_VERSION: '1.2.3'
+  GOPROXY: ${{ vars.GOPROXY || 'https://proxy.golang.org,direct' }}
+  GOSUMDB: ${{ vars.GOSUMDB || 'sum.golang.org' }}
+
+jobs:
+  # ============================================================
+  # meta: 解析并校验版本号，供后续所有 job 使用
+  # ============================================================
+  meta:
+    name: 解析版本号
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      version: ${{ steps.v.outputs.version }}
+      tag: ${{ steps.v.outputs.tag }}
+    steps:
+      - name: 校验版本号
+        id: v
+        run: |
+          set -euo pipefail
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            VERSION='${{ inputs.version }}'
+          else
+            VERSION="${GITHUB_REF_NAME#v}"
+          fi
+          # 版本号会同时写进 manifest 与二进制（-X main.version），
+          # 格式错误会让设备显示奇怪的版本，这里先挡住。
+          if ! printf '%s' "$VERSION" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+([-+][0-9A-Za-z.-]+)?$'; then
+            echo "::error::版本号不合法：'$VERSION'（要求语义化版本，如 0.2.0 或 0.2.0-rc1）"
+            exit 1
+          fi
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "tag=v$VERSION" >> "$GITHUB_OUTPUT"
+          {
+            echo "### 发布版本"
+            echo ""
+            echo "- 版本号：\`$VERSION\`"
+            echo "- Tag：\`v$VERSION\`"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  # ============================================================
+  # webui: 前端只构建一次，供 FPK 打包与独立分发共用
+  # ============================================================
+  webui:
+    name: 前端产物（各平台共用）
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    needs: [meta]
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: 安装依赖
+        working-directory: frontend
+        run: npm ci --no-audit --no-fund
+
+      - name: 类型检查
+        working-directory: frontend
+        run: npm run type-check
+
+      - name: 构建
+        working-directory: frontend
+        run: npm run build
+
+      # 打成单个 tar.gz：归集脚本要求每个 artifact 目录里只有一个文件，
+      # 免得「哪些文件才算发布物」这件事由脚本去猜。
+      - name: 打包 WebUI
+        run: |
+          set -euo pipefail
+          tar -czf "metalwatch-webui-${{ needs.meta.outputs.version }}.tar.gz" \
+            -C frontend/dist .
+          ls -lh metalwatch-webui-*.tar.gz
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: webui-dist
+          path: metalwatch-webui-*.tar.gz
+          if-no-files-found: error
+
+  # ============================================================
+  # server: 服务端分平台编译
+  # ============================================================
+  server:
+    name: 服务端 · ${{ matrix.goos }}/${{ matrix.goarch }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    needs: [meta]
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { goos: linux, goarch: amd64 }
+          - { goos: linux, goarch: arm64 }
+          - { goos: windows, goarch: amd64 }
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          cache-dependency-path: backend/go.sum
+
+      - name: 编译
+        working-directory: backend
+        env:
+          CGO_ENABLED: '0'
+          GOOS: ${{ matrix.goos }}
+          GOARCH: ${{ matrix.goarch }}
+        run: |
+          set -euo pipefail
+          mkdir -p ../dist
+          ext=""
+          [ "$GOOS" = "windows" ] && ext=".exe"
+          out="../dist/metalwatch-server-${GOOS}-${GOARCH}${ext}"
+          go build -trimpath -ldflags "-s -w -X main.version=${{ needs.meta.outputs.version }}" \
+            -o "$out" ./cmd/server
+          ls -lh "$out"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: server-${{ matrix.goos }}-${{ matrix.goarch }}
+          path: dist/metalwatch-server-${{ matrix.goos }}-${{ matrix.goarch }}*
+          if-no-files-found: error
+
+  # ============================================================
+  # agent: Agent 分平台编译（入口按平台分目录）
+  # ============================================================
+  agent:
+    name: Agent · ${{ matrix.goos }}/${{ matrix.goarch }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    needs: [meta]
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { goos: linux, goarch: amd64 }
+          - { goos: linux, goarch: arm64 }
+          - { goos: windows, goarch: amd64 }
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          cache-dependency-path: agent/go.sum
+
+      # 发布前先过测试：发布产物必须来自被测过的提交
+      - name: 单元测试
+        working-directory: agent
+        run: go test -count=1 ./...
+
+      - name: 编译
+        working-directory: agent
+        env:
+          CGO_ENABLED: '0'
+          GOOS: ${{ matrix.goos }}
+          GOARCH: ${{ matrix.goarch }}
+        run: |
+          set -euo pipefail
+          mkdir -p ../dist
+          ext=""
+          [ "$GOOS" = "windows" ] && ext=".exe"
+          out="../dist/metalwatch-agent-${GOOS}-${GOARCH}${ext}"
+          go build -trimpath -ldflags "-s -w -X main.version=${{ needs.meta.outputs.version }}" \
+            -o "$out" "./cmd/${GOOS}"
+          ls -lh "$out"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: agent-${{ matrix.goos }}-${{ matrix.goarch }}
+          path: dist/metalwatch-agent-${{ matrix.goos }}-${{ matrix.goarch }}*
+          if-no-files-found: error
+
+  # ============================================================
+  # fpk: 飞牛原生包，按架构各出一个（x86 / arm）
+  # ============================================================
+  # 为什么必须是两个包：包内含原生二进制，manifest 的 platform 只有 x86 / arm
+  # 两个合法值（写 all 会让设备装到架构不符的包，check_fpk.py 有断言）。
+  fpk:
+    name: FPK · ${{ matrix.platform }}（GOARCH=${{ matrix.goarch }}）
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    needs: [meta, webui]
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { goarch: amd64, platform: x86, artifact: fpk-x86 }
+          - { goarch: arm64, platform: arm, artifact: fpk-arm }
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          cache-dependency-path: backend/go.sum
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+
+      - name: 取回前端产物
+        uses: actions/download-artifact@v4
+        with:
+          name: webui-dist
+          path: webui
+
+      - name: 解包到 frontend/dist
+        run: |
+          set -euo pipefail
+          mkdir -p frontend/dist
+          tar -xzf webui/*.tar.gz -C frontend/dist
+          ls frontend/dist | head
+
+      - name: 安装 fnpack
+        run: |
+          set -euo pipefail
+          url="https://static2.fnnas.com/fnpack/fnpack-${FNPACK_VERSION}-linux-amd64"
+          curl -fsSL --retry 3 --retry-delay 5 -o /tmp/fnpack "$url"
+          sudo install -m 0755 /tmp/fnpack /usr/local/bin/fnpack
+          fnpack --help >/dev/null
+          echo "fnpack 就绪：$(command -v fnpack)"
+
+      # --skip-frontend：前端已在上游 job 构建并回填，避免每个架构重复构建一次
+      # --require-fnpack：缺 fnpack 时直接失败，绝不允许「静默跳过打包却报成功」
+      - name: 构建 FPK（编译 + 回写版本与 platform + 骨架校验 + 打包）
+        run: |
+          python deploy/script/build_fpk.py "${{ needs.meta.outputs.version }}" \
+            --skip-frontend \
+            --goos linux \
+            --goarch ${{ matrix.goarch }} \
+            --platform ${{ matrix.platform }} \
+            --require-fnpack
+
+      - name: 确认 manifest 里的版本与架构已回写
+        run: |
+          set -euo pipefail
+          grep -E '^(version|platform)=' deploy/fpk/metalwatch/manifest
+
+      - name: 收集 .fpk
+        run: |
+          set -euo pipefail
+          mkdir -p pkg
+          cp deploy/fpk/metalwatch/*.fpk pkg/
+          ls -lh pkg/
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.artifact }}
+          path: pkg/*.fpk
+          if-no-files-found: error
+
+  # ============================================================
+  # verify-server: 拿「将要发布的那份二进制」跑真实冒烟
+  # ============================================================
+  # 关键区别：这里冒烟的是 artifact 里的文件本身，不是「同一份源码再编译一次」的结果。
+  # 本项目踩过 -trimpath 抹掉 GOROOT 导致产物缺时区数据、启动即死的坑 ——
+  # 只有拿真产物跑才发现得了。
+  verify-server:
+    name: 验证 · linux/amd64 产物冒烟
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    needs: [meta, server]
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: server-linux-amd64
+          path: artifact
+
+      - name: 冒烟（10 项：启动 / 鉴权 / 落盘 / 重启恢复）
+        run: |
+          python deploy/tools/smoke_server.py \
+            --binary artifact/metalwatch-server-linux-amd64 \
+            --goos linux --goarch amd64 --port 18099
+
+  # ============================================================
+  # release: 归集资产、算校验和、创建 Release
+  # ============================================================
+  release:
+    name: 发布 GitHub Release
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    needs: [meta, webui, server, agent, fpk, verify-server]
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+
+      # 不带 merge-multiple：保留 raw/<artifact 名>/ 的层级，
+      # 否则两个架构的 .fpk 若同名会互相覆盖，且无法分辨谁是谁。
+      - name: 下载全部产物
+        uses: actions/download-artifact@v4
+        with:
+          path: raw
+
+      - name: 归集 / 改名 / 生成 SHA256SUMS
+        run: |
+          set -euo pipefail
+          python deploy/tools/collect_release_assets.py \
+            --raw raw --out dist \
+            --version "${{ needs.meta.outputs.version }}"
+          {
+            echo "### 发布资产"
+            echo ""
+            echo '```'
+            cat dist/SHA256SUMS
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: 创建或更新 Release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          TAG="${{ needs.meta.outputs.tag }}"
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            # 已存在就只补资产：重跑流水线时不至于因为「tag 已发布」而整体失败
+            echo "Release $TAG 已存在，覆盖上传资产"
+            gh release upload "$TAG" dist/* --clobber
+          else
+            args=(--title "MetalWatch $TAG" --generate-notes)
+            if [ "${{ inputs.draft }}" = "true" ]; then
+              args+=(--draft)
+              echo "按草稿发布（人工确认后再手动 publish）"
+            fi
+            gh release create "$TAG" dist/* "${args[@]}"
+          fi
+
+      - name: 回显最终资产清单
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release view "${{ needs.meta.outputs.tag }}" \
+            --json assets --jq '.assets[] | "\(.name)\t\(.size) bytes"'
