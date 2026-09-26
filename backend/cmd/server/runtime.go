@@ -19,6 +19,7 @@ import (
 
 	"github.com/LarryMKott/metalwatch/api/agent"
 	"github.com/LarryMKott/metalwatch/api/web"
+	"github.com/LarryMKott/metalwatch/api/web/webui"
 	"github.com/LarryMKott/metalwatch/internal/adapter"
 	"github.com/LarryMKott/metalwatch/internal/app"
 	"github.com/LarryMKott/metalwatch/internal/engine"
@@ -174,7 +175,8 @@ func newRuntime(boot *bootstrap) (r *runtime, err error) {
 		Config: cfg, MasterKey: masterKey,
 		Store: boot.db, TSDB: ts, Pipeline: r.pipe, Alerts: r.alerts,
 		Hosts: r.hosts, Pool: r.pool, Hub: r.hub, IPMI: r.poller, Inventory: r.inventory,
-		Log: log, Version: version, Started: time.Now(),
+		WebUI: webui.Dist(),
+		Log:   log, Version: version, Started: time.Now(),
 	}
 
 	// gRPC 通道（W3）与 REST 共用单端口，按协议分流（docs/01 D22）

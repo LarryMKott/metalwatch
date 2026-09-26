@@ -11,15 +11,16 @@ name: Release
 #
 #   类别        平台                  产物名
 #   ---------   -------------------   --------------------------------------------
-#   服务端      linux/amd64           metalwatch-server-linux-amd64
-#   服务端      linux/arm64           metalwatch-server-linux-arm64
-#   服务端      windows/amd64         metalwatch-server-windows-amd64.exe
+#   服务端      linux/amd64           metalwatch-server-linux-amd64（内嵌 WebUI，D42）
+#   服务端      linux/arm64           metalwatch-server-linux-arm64（内嵌 WebUI）
+#   服务端      windows/amd64         metalwatch-server-windows-amd64.exe（内嵌 WebUI）
 #   Agent       linux/amd64           metalwatch-agent-linux-amd64
 #   Agent       linux/arm64           metalwatch-agent-linux-arm64
 #   Agent       windows/amd64         metalwatch-agent-windows-amd64.exe
 #   飞牛包      x86（amd64）          metalwatch-fpk-x86_64-<版本>.fpk
 #   飞牛包      arm（arm64）          metalwatch-fpk-arm64-<版本>.fpk
-#   WebUI       全平台共用            metalwatch-webui-<版本>.tar.gz
+#   WebUI       全平台共用            metalwatch-webui-<版本>.tar.gz（独立分发用；
+#                                     服务端/FPK 里已内嵌同一份产物）
 #   校验和                            SHA256SUMS
 #   发布日志     Release 描述（正文）    上次发版至今的分组提交记录，
 #                                     由 deploy/tools/gen_release_notes.py 生成
@@ -102,7 +103,7 @@ jobs:
           } >> "$GITHUB_STEP_SUMMARY"
 
   # ============================================================
-  # webui: 前端只构建一次，供 FPK 打包与独立分发共用
+  # webui: 前端只构建一次，供 server/fpk 内嵌进二进制（D42）与独立分发共用
   # ============================================================
   webui:
     name: 前端产物（各平台共用）
@@ -145,6 +146,14 @@ jobs:
           path: metalwatch-webui-*.tar.gz
           if-no-files-found: error
 
+      # 未经打包的产物原样上传：server / fpk job 要把它放进 go:embed 目录再编译。
+      # 与 webui-dist（tar.gz，只作发布附件）分开，互不干扰。
+      - uses: actions/upload-artifact@v4
+        with:
+          name: webui-files
+          path: frontend/dist
+          if-no-files-found: error
+
   # ============================================================
   # server: 服务端分平台编译
   # ============================================================
@@ -152,7 +161,7 @@ jobs:
     name: 服务端 · ${{ matrix.goos }}/${{ matrix.goarch }}
     runs-on: ubuntu-latest
     timeout-minutes: 25
-    needs: [meta]
+    needs: [meta, webui]
     strategy:
       fail-fast: false
       matrix:
@@ -167,6 +176,13 @@ jobs:
         with:
           go-version: ${{ env.GO_VERSION }}
           cache-dependency-path: backend/go.sum
+
+      # 前端产物放进 go:embed 目录（占位 index.html 会被真实产物整体替换），
+      # 编译出的服务端因此自带完整 UI（D42）
+      - uses: actions/download-artifact@v4
+        with:
+          name: webui-files
+          path: backend/api/web/webui/dist
 
       - name: 编译
         working-directory: backend
@@ -249,7 +265,7 @@ jobs:
     name: FPK · ${{ matrix.platform }}（GOARCH=${{ matrix.goarch }}）
     runs-on: ubuntu-latest
     timeout-minutes: 30
-    needs: [meta]
+    needs: [meta, webui]
     strategy:
       fail-fast: false
       matrix:
@@ -268,11 +284,13 @@ jobs:
         with:
           python-version: ${{ env.PYTHON_VERSION }}
 
-      # 这里**不**去取 webui-dist：FPK 里目前只装原生二进制 + app/ui 的入口配置，
-      # 前端产物要等服务端上 go:embed 才有消费者（已知缺口，见 docs/04 §5）。
-      # 原先写了一步「下载 webui 并解包到 frontend/dist」，但 build_fpk.py 从不读它，
-      # 属于看着像"前端已进包"、实际什么都没装的假动作，故删除。
-      # webui job 本身保留：它产出的 metalwatch-webui-<版本>.tar.gz 仍是发布资产之一。
+      # 前端产物放回规范位置 frontend/dist，由 build_fpk.py 的 sync_webui()
+      # 同步进 go:embed 目录——FPK 里的服务端因此自带完整 UI（D42，
+      # 取代此前「FPK 不装前端、桌面入口 404」的已知缺口）
+      - uses: actions/download-artifact@v4
+        with:
+          name: webui-files
+          path: frontend/dist
 
       - name: 安装 fnpack
         run: |
@@ -283,7 +301,7 @@ jobs:
           fnpack --help >/dev/null
           echo "fnpack 就绪：$(command -v fnpack)"
 
-      # --skip-frontend：FPK 不装前端产物（见上），跳过 npm 构建
+      # --skip-frontend：前端产物已由上面的 artifact 提供，跳过 npm 构建
       # --require-fnpack：缺 fnpack 时直接失败，绝不允许「静默跳过打包却报成功」
       - name: 构建 FPK（编译 + 回写版本与 platform + 骨架校验 + 打包）
         run: |
@@ -335,11 +353,12 @@ jobs:
           name: server-linux-amd64
           path: artifact
 
-      - name: 冒烟（10 项：启动 / 鉴权 / 落盘 / 重启恢复）
+      - name: 冒烟（11 项：启动 / 鉴权 / 内嵌 UI / 落盘 / 重启恢复）
         run: |
           python deploy/tools/smoke_server.py \
             --binary artifact/metalwatch-server-linux-amd64 \
-            --goos linux --goarch amd64 --port 18099
+            --goos linux --goarch amd64 --port 18099 \
+            --strict-ui
 
   # ============================================================
   # release: 归集资产、算校验和、创建 Release

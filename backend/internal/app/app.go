@@ -5,6 +5,7 @@
 package app
 
 import (
+	"io/fs"
 	"log/slog"
 	"time"
 
@@ -29,6 +30,7 @@ type Deps struct {
 	Hub       *ws.Hub                   // WebSocket 实时推送（W7）；可为 nil
 	IPMI      *service.IPMIPoller       // 带外采集轮询器（W4）；可为 nil
 	Inventory *service.InventoryService // 资产快照与变更检测（W2）
+	WebUI     fs.FS                     // 内嵌前端产物（D42）；nil = 不挂载 WebUI（纯 API 形态）
 	Log       *slog.Logger
 	Version   string
 	Started   time.Time

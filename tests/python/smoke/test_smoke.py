@@ -95,3 +95,13 @@ def test_10_frontend_reachable():
     import urllib.request
     with urllib.request.urlopen(config.FRONTEND_URL, timeout=5) as resp:
         assert resp.status == 200
+
+
+def test_11_embedded_webui():
+    """服务端内嵌 WebUI 可达（D42）：GET / 出 HTML——占位或真实产物都算通。"""
+    import urllib.request
+    with urllib.request.urlopen(config.BASE_URL + "/", timeout=5) as resp:
+        assert resp.status == 200
+        assert "text/html" in resp.headers.get("Content-Type", "")
+        body = resp.read().decode("utf-8", "replace")
+        assert body.lstrip().lower().startswith("<!doctype html")

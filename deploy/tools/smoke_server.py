@@ -37,7 +37,7 @@ state: dict[str, object] = {}
 
 
 def build(work: pathlib.Path, goos: str, goarch: str, version: str) -> pathlib.Path | None:
-    print("==> [1/10] 编译服务端")
+    print("==> [1/11] 编译服务端")
     exe = work / ("metalwatch.exe" if goos == "windows" else "metalwatch")
     env = dict(os.environ)
     env.update(GOPROXY=os.environ.get("GOPROXY", "https://goproxy.cn,direct"),
@@ -98,6 +98,16 @@ def http(base: str, method: str, path: str, token: str | None = None, body: dict
             return e.code, {"raw": raw[:200]}
 
 
+def http_raw(path_url: str) -> tuple[int, str, str]:
+    """取原始响应：(status, content-type, body)。HTML 检查不走 JSON 解析、不截断。"""
+    req = urllib.request.Request(path_url)
+    try:
+        with urllib.request.urlopen(req, timeout=10) as r:
+            return r.status, (r.headers.get("Content-Type") or ""), r.read().decode("utf-8", "replace")
+    except urllib.error.HTTPError as e:
+        return e.code, "", ""
+
+
 def wait_ready(base: str, proc: subprocess.Popen, tries: int = 40) -> bool:
     for _ in range(tries):
         time.sleep(0.5)
@@ -121,6 +131,9 @@ def main() -> int:
     ap.add_argument("--binary", default="",
                     help="跳过编译，直接冒烟这个现成二进制（发布链路用它验证待交付的产物本身）")
     ap.add_argument("--keep", action="store_true", help="保留本次运行目录便于排查")
+    ap.add_argument("--strict-ui", action="store_true",
+                    help="内嵌 UI 必须是真实前端产物（index 含 id=\"app\"），占位页面判失败。"
+                         "发布链路必开；本机开发编译（未构建前端）不开，允许占位")
     args = ap.parse_args()
 
     base = f"http://127.0.0.1:{args.port}"
@@ -147,7 +160,7 @@ def main() -> int:
     argv = [str(exe), "--data", str(data), "--listen", f"127.0.0.1:{args.port}",
             "--log-dir", str(logs), "--pid-file", str(pid_file)]
 
-    print("==> [2/10] 拉起进程（FPK 同款参数）")
+    print("==> [2/11] 拉起进程（FPK 同款参数）")
     out1 = (logs / "stdout.log").open("w", encoding="utf-8")
     proc = subprocess.Popen(argv, stdout=out1, stderr=subprocess.STDOUT)
     try:
@@ -158,15 +171,25 @@ def main() -> int:
         if not ready:
             return 1
 
-        print("==> [3/10] PID 文件")
+        print("==> [3/11] PID 文件")
         pid_txt = pid_file.read_text(encoding="utf-8").strip() if pid_file.exists() else ""
         check("PID 文件写入", pid_txt.isdigit(), pid_txt)
 
-        print("==> [4/10] 未认证访问应被拦截")
+        print("==> [4/11] 未认证访问应被拦截")
         st, body = http(base, "GET", "/api/v1/hosts")
         check("未带令牌 GET /api/v1/hosts → 401", st == 401, f"{st} {body.get('code','')}")
 
-        print("==> [5/10] 首次启动引导管理员")
+        print("==> [5/11] 内嵌 WebUI（D42：go:embed 前端产物）")
+        st_ui, ct_ui, body_ui = http_raw(base + "/")
+        is_html = "text/html" in ct_ui
+        has_app = 'id="app"' in body_ui
+        ui_ok = st_ui == 200 and is_html and (has_app or not args.strict_ui)
+        check("GET / 返回前端页面", ui_ok,
+              f"{st_ui} {ct_ui}" + ("" if has_app else "（占位页面，无 id=app）"))
+        if st_ui == 200 and is_html and not has_app:
+            print("    ⚠️ 内嵌的是占位页面——正式发布产物请先构建前端并确认 sync_webui 生效")
+
+        print("==> [6/11] 首次启动引导管理员")
         boot = data / "bootstrap_admin.txt"
         check("引导文件生成", boot.exists())
         if not boot.exists():
@@ -178,7 +201,7 @@ def main() -> int:
         username = un.group(1) if un else "admin"
         check("口令可解析", bool(password), f"{len(password)} 字符")
 
-        print("==> [6/10] 登录")
+        print("==> [7/11] 登录")
         st, body = http(base, "POST", "/api/v1/auth/login",
                         body={"username": username, "password": password})
         d = body.get("data") or body
@@ -192,7 +215,7 @@ def main() -> int:
                      body={"username": username, "password": "wrong-pass"})
         check("错误口令被拒 → 401", st == 401, str(st))
 
-        print("==> [7/10] 带令牌访问")
+        print("==> [8/11] 带令牌访问")
         st, _ = http(base, "GET", "/api/v1/hosts", token=token)
         check("GET /api/v1/hosts", st == 200, str(st))
         st, body = http(base, "GET", "/api/v1/auth/me", token=token)
@@ -200,18 +223,18 @@ def main() -> int:
         check("GET /auth/me 身份正确", st == 200 and me.get("role") == "admin",
               f"{me.get('username')}/{me.get('role')}")
 
-        print("==> [8/10] 审计落库")
+        print("==> [9/11] 审计落库")
         st, body = http(base, "GET", "/api/v1/audit-logs", token=token)
         d = body.get("data") or body
         items = d.get("items") or d.get("list") or []
         check("审计有记录", st == 200 and len(items) > 0, f"{len(items)} 条")
 
-        print("==> [9/10] 数据落盘")
+        print("==> [10/11] 数据落盘")
         files = sorted(p.name for p in data.rglob("*") if p.is_file())
         need = {"metalwatch.db", "master.key", "tsdb.db"}
         check("关键数据文件齐备", need.issubset(set(files)), ", ".join(files))
 
-        print("==> [10/10] 重启复用（对应真机重装/升级数据恢复）")
+        print("==> [11/11] 重启复用（对应真机重装/升级数据恢复）")
         proc.terminate()
         try:
             proc.wait(timeout=15)

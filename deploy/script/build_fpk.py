@@ -97,6 +97,25 @@ def build_frontend() -> bool:
     return run(cmd + ["run", "build"], cwd=FRONTEND) == 0
 
 
+def sync_webui() -> None:
+    """把 frontend/dist 同步进服务端的 go:embed 目录（D42）。
+
+    服务端以 go:embed 内嵌前端产物（backend/api/web/webui/dist，缺省为入库占位）。
+    打包前必须把真实产物放进去，否则 FPK 里装的是占位页面——这种错 placeholder
+    检查查不出（index.html 存在、骨架合法），只能靠 smoke 的「index 含 id=app」断言
+    兜底，所以这里从源头同步，不依赖调用方记得手动拷贝。
+    """
+    src, dst = FRONTEND / "dist", BACKEND / "api" / "web" / "webui" / "dist"
+    if not (src / "index.html").is_file():
+        print("    frontend/dist 不存在，服务端将内嵌占位页面（仅开发态可接受）")
+        return
+    if dst.is_dir():
+        shutil.rmtree(dst)
+    shutil.copytree(src, dst)
+    n = sum(1 for _ in dst.rglob("*") if _.is_file())
+    print(f"    前端产物已同步进 embed 目录（{n} 个文件）：{dst}")
+
+
 def build_backend(version: str, goos: str, goarch: str) -> bool:
     print(f"==> [2/5] 编译服务端（CGO_ENABLED=0 静态二进制，{goos}/{goarch}）")
     OUT_BIN.parent.mkdir(parents=True, exist_ok=True)
@@ -218,6 +237,7 @@ def main() -> int:
     if not args.skip_frontend and not build_frontend():
         print("前端构建失败")
         return 1
+    sync_webui()
     if not build_backend(version, args.goos, args.goarch):
         print("服务端编译失败")
         return 1

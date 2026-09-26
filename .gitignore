@@ -7,7 +7,10 @@
 # 构建产物
 *.fpk
 build/
-dist/
+# 根目录 dist 锚定 + frontend/dist 显式列出：无锚定的 dist/ 会排除掉
+# backend/api/web/webui/dist 目录本身，导致占位 index.html 的再包含规则失效
+/dist/
+frontend/dist/
 deploy/build/
 deploy/fpk/*/target/
 # 服务端静态二进制（由 deploy/script/build_fpk.py 生成，30MB 级，不入库）
@@ -88,3 +91,8 @@ tests/python/reports/
 # Release 发布说明：发布时由 deploy/tools/gen_release_notes.py 现场生成，不入库
 #（累积历史在 CHANGELOG.md；GitHub 的 --notes-file 直接吃构建期文件，无 Gitee 的入库约束）
 RELEASE_NOTES.md
+
+# 前端真实产物（服务端 go:embed 的源，D42）：构建时生成不入库。
+# 占位 index.html 除外——它是「没构建前端也能编译/测试」的兜底。
+backend/api/web/webui/dist/*
+!backend/api/web/webui/dist/index.html

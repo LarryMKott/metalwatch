@@ -12,6 +12,8 @@ from pathlib import Path
 ENDPOINTS = {
     # 系统 / 存储
     ("GET", "/healthz"),
+    # 内嵌 WebUI 入口（D42；SPA 回落与 /assets 由同一入口覆盖，不单列模板）
+    ("GET", "/"),
     ("GET", "/api/v1/system/status"),
     ("GET", "/api/v1/system/storage/backends"),
     ("GET", "/api/v1/overview"),

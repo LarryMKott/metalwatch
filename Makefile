@@ -36,9 +36,11 @@ help:
 pb:
 	bash $(ROOT)/deploy/script/pb-gen.sh
 
-## 构建前端（Node 22 / 24 均可）
+## 构建前端（Node 22 / 24 均可），并同步进服务端 embed 目录（D42：go:embed 内嵌）
 web:
 	cd $(FRONTEND) && npm ci && npm run build
+	rm -rf $(BACKEND)/api/web/webui/dist
+	cp -r $(FRONTEND)/dist $(BACKEND)/api/web/webui/dist
 
 ## 构建服务端（CGO_ENABLED=0 静态编译，供飞牛 OS 直接运行）
 build: web

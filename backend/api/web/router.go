@@ -55,10 +55,18 @@ func NewRouter(d *app.Deps) *gin.Engine {
 
 	agentpb.RegisterRoutes(r, d)
 
-	r.NoRoute(func(c *gin.Context) {
-		c.JSON(http.StatusNotFound, utils.ErrorBody{
-			Code: "not_found", Message: "接口不存在", RequestID: utils.RequestIDOf(c),
-		})
-	})
+	// 内嵌 WebUI（D42）：d.WebUI 为 nil 表示不挂 UI（纯 API 形态 / 部分测试），
+	// 未匹配路径保持 JSON 404 契约；挂载后由 WebUIHandler 接管 NoRoute（SPA 回落）
+	if d.WebUI != nil {
+		handler.NewWebUIHandler(d.WebUI).Register(r)
+	} else {
+		r.NoRoute(notFound)
+	}
 	return r
+}
+
+func notFound(c *gin.Context) {
+	c.JSON(http.StatusNotFound, utils.ErrorBody{
+		Code: "not_found", Message: "接口不存在", RequestID: utils.RequestIDOf(c),
+	})
 }
