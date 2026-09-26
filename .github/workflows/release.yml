@@ -4,6 +4,8 @@ name: Release
 #   1. 推 tag：`git tag v0.2.0 && git push origin v0.2.0`
 #   2. 手动触发（Actions → Release → Run workflow），此时会以 HEAD 为准，
 #      若 tag 不存在则由 gh release create 自动创建。
+#      勾上 dry_run 则只跑构建/打包/制品冒烟/归集，**不创建 tag 与 Release**
+#      （零副作用地验证发布链路本身，资产作为 artifact 上传供人工核对）。
 #
 # 产物矩阵（每个平台单独构建，互不掩盖失败）：
 #
@@ -32,6 +34,11 @@ on:
         type: string
       draft:
         description: '先发为草稿，人工确认资产无误后再手动发布'
+        required: false
+        default: false
+        type: boolean
+      dry_run:
+        description: '只跑构建/打包/制品冒烟/归集，不创建 tag 与 Release（验证发布链路用）'
         required: false
         default: false
         type: boolean
@@ -375,6 +382,9 @@ jobs:
           } >> "$GITHUB_STEP_SUMMARY"
 
       - name: 创建或更新 Release
+        # 干跑时整条链路照跑，唯独不碰仓库：不建 tag、不建 Release。
+        # 判断写成 event_name + inputs 双条件，是因为 tag 推送时 inputs 为空。
+        if: ${{ github.event_name != 'workflow_dispatch' || inputs.dry_run != true }}
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
@@ -393,7 +403,27 @@ jobs:
             gh release create "$TAG" dist/* "${args[@]}"
           fi
 
+      # 干跑没有 Release 页面可看，资产改从 artifact 取，同样能核对名字与校验和
+      - name: 干跑时把资产作为 artifact 上传
+        if: ${{ inputs.dry_run == true }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-assets-dry-run
+          path: dist/
+          if-no-files-found: error
+
+      - name: 干跑提示
+        if: ${{ inputs.dry_run == true }}
+        run: |
+          {
+            echo "### 干跑（dry_run=true）"
+            echo ""
+            echo "构建 / 双架构 FPK 打包 / 待交付制品冒烟 / 归集与 SHA256SUMS 全部执行，"
+            echo "**未创建 tag 与 Release**。资产见 artifact \`release-assets-dry-run\`。"
+          } >> "$GITHUB_STEP_SUMMARY"
+
       - name: 回显最终资产清单
+        if: ${{ github.event_name != 'workflow_dispatch' || inputs.dry_run != true }}
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
