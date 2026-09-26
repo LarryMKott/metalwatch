@@ -4,6 +4,11 @@
 // proto 代码生成（make pb）落地后，本包类型将与 pb 消息互相转换，字段名保持一致。
 package model
 
+import (
+	"fmt"
+	"time"
+)
+
 // Sample 是一次指标采样。
 // Labels 严禁放入序列号、时间戳等高基数值（服务端会拒绝，见 docs/03 §3）。
 type Sample struct {
@@ -75,4 +80,15 @@ type HostIdentity struct {
 	OSVersion    string
 	AgentVersion string
 	Collect      []string
+}
+
+// NewBatchID 生成一次上报批次的幂等键。
+//
+// 属于本包而不是各通道各自实现：batch_id 是**线格式契约**，服务端按它去重，
+// gRPC 通道（internal/grpcstream）与 JSON 兼容通道（internal/report）必须产出
+// 完全同构的值。此前两处各有一份实现，且其中一份连调两次 time.Now()，
+// 纳秒与微秒取自不同时刻 —— 注释声称「同格式」但实现并不保证。
+func NewBatchID() string {
+	now := time.Now().UTC()
+	return fmt.Sprintf("%d-%08x", now.UnixNano(), uint32(now.UnixMicro()))
 }

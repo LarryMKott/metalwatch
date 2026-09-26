@@ -165,16 +165,12 @@ func IDParam(c *gin.Context) (int64, error) {
 	return id, nil
 }
 
+// atoiDefault 解析非负整数查询参数，缺失、非法或为负一律回退 def。
+// 手写十进制循环曾是 strconv.Atoi 的劣化复制：超长输入会静默溢出成负数。
 func atoiDefault(s string, def int) int {
-	if s == "" {
+	n, err := strconv.Atoi(s)
+	if err != nil || n < 0 {
 		return def
-	}
-	n := 0
-	for i := 0; i < len(s); i++ {
-		if s[i] < '0' || s[i] > '9' {
-			return def
-		}
-		n = n*10 + int(s[i]-'0')
 	}
 	return n
 }

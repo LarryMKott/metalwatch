@@ -185,10 +185,3 @@ func readXOR(data []byte, pos *int, prev *uint64) (uint64, bool) {
 	*prev = v
 	return v, true
 }
-
-func min(a, b int) int {
-	if a < b {
-		return a
-	}
-	return b
-}

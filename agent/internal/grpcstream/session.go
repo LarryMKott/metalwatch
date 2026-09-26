@@ -218,7 +218,7 @@ func (s *Stream) collectLoop(ctx context.Context) {
 
 func (s *Stream) collectOnce(ctx context.Context) {
 	rep, _ := s.collector.Collect(ctx) // 部分失败仍上报已采到的数据
-	msg := toProtoReport(rep, newBatchID(), time.Now())
+	msg := toProtoReport(rep, model.NewBatchID(), time.Now())
 	if s.trySend(msg) {
 		return
 	}

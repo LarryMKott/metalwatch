@@ -7,6 +7,9 @@ import (
 	"fmt"
 	"strings"
 	"time"
+
+	"github.com/LarryMKott/metalwatch/pkg/strs"
+	"github.com/LarryMKott/metalwatch/pkg/timex"
 )
 
 // ErrNotFound 表示目标记录不存在。
@@ -70,8 +73,8 @@ func (r *HostRepo) Create(ctx context.Context, h *Host) (int64, error) {
 
 	res, err := r.s.ExecContext(ctx, q,
 		h.Hostname, h.PrimaryIP, h.BMCIP, h.SN, h.SMBIOSUUID, h.Site, h.Rack, h.RackUnit,
-		defaultStr(h.OSType, "unknown"), h.OSVersion, boolToInt(h.CollectAgent), boolToInt(h.CollectIPMI),
-		h.AgentVersion, defaultStr(h.Status, "unknown"), tsOrNil(h.LastSeenAt),
+		strs.OrDefault(h.OSType, "unknown"), h.OSVersion, boolToInt(h.CollectAgent), boolToInt(h.CollectIPMI),
+		h.AgentVersion, strs.OrDefault(h.Status, "unknown"), tsOrNil(h.LastSeenAt),
 		h.GeoCountry, h.GeoASN, h.Remark,
 		formatTime(h.CreatedAt), formatTime(h.UpdatedAt))
 	if err != nil {
@@ -273,14 +276,8 @@ func boolToInt(b bool) int {
 	return 0
 }
 
-func defaultStr(v, def string) string {
-	if strings.TrimSpace(v) == "" {
-		return def
-	}
-	return v
-}
-
-func formatTime(t time.Time) string { return t.UTC().Format(time.RFC3339) }
+// formatTime 是包装库写时间的唯一出口，格式约定收在 pkg/timex（跨方言硬约束 ①）。
+func formatTime(t time.Time) string { return timex.RFC3339(t) }
 
 func tsOrNil(t *time.Time) any {
 	if t == nil || t.IsZero() {

@@ -11,6 +11,7 @@ import (
 
 	"github.com/LarryMKott/metalwatch/internal/adapter"
 	"github.com/LarryMKott/metalwatch/pkg/crypto"
+	"github.com/LarryMKott/metalwatch/pkg/ptr"
 )
 
 // ErrEnrollCodeUnavailable 表示注册码无效、过期或已用尽。
@@ -87,9 +88,9 @@ func (s *EnrollService) Enroll(ctx context.Context, in EnrollInput) (*EnrollResu
 		host, err = s.hosts.Create(ctx, CreateHostInput{
 			Hostname:   hostname,
 			PrimaryIP:  ip,
-			SMBIOSUUID: optionalString(uuid),
+			SMBIOSUUID: ptr.OfNonEmpty(uuid),
 			OSType:     in.OSType,
-			OSVersion:  optionalString(in.OSVersion),
+			OSVersion:  ptr.OfNonEmpty(in.OSVersion),
 		})
 		if err != nil {
 			// 资产创建失败时归还次数：注册码不被白白烧掉（消费/归还严格配对）
@@ -122,12 +123,4 @@ func (s *EnrollService) Enroll(ctx context.Context, in EnrollInput) (*EnrollResu
 		ReportInterval: s.reportInterval,
 		AssetInterval:  s.assetInterval,
 	}, nil
-}
-
-// optionalString 空串转 nil 指针（资产表可空列约定）。
-func optionalString(s string) *string {
-	if strings.TrimSpace(s) == "" {
-		return nil
-	}
-	return &s
 }

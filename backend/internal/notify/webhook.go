@@ -15,6 +15,8 @@ import (
 	"time"
 
 	"github.com/LarryMKott/metalwatch/internal/adapter"
+	"github.com/LarryMKott/metalwatch/pkg/ptr"
+	"github.com/LarryMKott/metalwatch/pkg/strs"
 )
 
 // 默认重试节奏（M6 验收 4：失败按 3 次指数退避 1s/5s/25s）。
@@ -78,18 +80,11 @@ func BuildPayload(event string, e *adapter.AlertEvent, host *adapter.Host, ts ti
 	if host != nil {
 		p.Host = HostInfo{
 			ID: host.ID, Hostname: host.Hostname, PrimaryIP: host.PrimaryIP,
-			Site: deref(host.Site), Rack: deref(host.Rack),
-			SN: deref(host.SN), GeoCountry: deref(host.GeoCountry),
+			Site: ptr.Deref(host.Site), Rack: ptr.Deref(host.Rack),
+			SN: ptr.Deref(host.SN), GeoCountry: ptr.Deref(host.GeoCountry),
 		}
 	}
 	return p
-}
-
-func deref(s *string) string {
-	if s == nil {
-		return ""
-	}
-	return *s
 }
 
 // webhookConfig 是 notify_channel.config 的 webhook 形态。
@@ -232,7 +227,7 @@ func severityAtLeast(severity, minSeverity string) bool {
 }
 
 func (n *Notifier) markChannel(ctx context.Context, ch *adapter.NotifyChannel, result string) {
-	if err := n.repo.UpdateResult(ctx, ch.ID, truncate(result, 200), time.Now().UTC()); err != nil {
+	if err := n.repo.UpdateResult(ctx, ch.ID, strs.Truncate(result, 200), time.Now().UTC()); err != nil {
 		n.log.Warn("渠道结果回写失败", "channel", ch.Name, "err", err)
 	}
 }
@@ -244,11 +239,4 @@ func (n *Notifier) markEvent(ctx context.Context, p *EventPayload, state string)
 	if err := n.alerts.MarkNotifyState(ctx, p.Alert.ID, state, time.Now().UTC()); err != nil {
 		n.log.Warn("事件投递状态回写失败", "id", p.Alert.ID, "err", err)
 	}
-}
-
-func truncate(s string, n int) string {
-	if len(s) <= n {
-		return s
-	}
-	return s[:n]
 }

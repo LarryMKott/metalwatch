@@ -11,6 +11,7 @@ import (
 
 	"github.com/LarryMKott/metalwatch/internal/adapter"
 	"github.com/LarryMKott/metalwatch/internal/service"
+	"github.com/LarryMKott/metalwatch/pkg/ptr"
 	"github.com/LarryMKott/metalwatch/pkg/utils"
 )
 
@@ -47,15 +48,15 @@ func toHostDTO(h *adapter.Host) HostDTO {
 		CreatedAt: h.CreatedAt.UTC().Format(time.RFC3339),
 		UpdatedAt: h.UpdatedAt.UTC().Format(time.RFC3339),
 	}
-	d.BMCIP = deref(h.BMCIP)
-	d.SN = deref(h.SN)
-	d.SMBIOSUUID = deref(h.SMBIOSUUID)
-	d.Site = deref(h.Site)
-	d.Rack = deref(h.Rack)
-	d.OSVersion = deref(h.OSVersion)
-	d.AgentVersion = deref(h.AgentVersion)
-	d.GeoCountry = deref(h.GeoCountry)
-	d.Remark = deref(h.Remark)
+	d.BMCIP = ptr.Deref(h.BMCIP)
+	d.SN = ptr.Deref(h.SN)
+	d.SMBIOSUUID = ptr.Deref(h.SMBIOSUUID)
+	d.Site = ptr.Deref(h.Site)
+	d.Rack = ptr.Deref(h.Rack)
+	d.OSVersion = ptr.Deref(h.OSVersion)
+	d.AgentVersion = ptr.Deref(h.AgentVersion)
+	d.GeoCountry = ptr.Deref(h.GeoCountry)
+	d.Remark = ptr.Deref(h.Remark)
 	if h.LastSeenAt != nil {
 		d.LastSeenAt = h.LastSeenAt.UTC().Format(time.RFC3339)
 	}
@@ -159,11 +160,4 @@ func (h *HostHandler) Delete(c *gin.Context) {
 		return
 	}
 	c.Status(http.StatusNoContent)
-}
-
-func deref(p *string) string {
-	if p == nil {
-		return ""
-	}
-	return *p
 }

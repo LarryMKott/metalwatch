@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"strconv"
+	"strings"
 	"testing"
 
 	"github.com/gin-gonic/gin"
@@ -284,14 +285,5 @@ func TestAuthMeAndChangePassword(t *testing.T) {
 
 // jsonBodyHas 判断响应体里是否出现某字符串（用于断言明文令牌不外泄）。
 func jsonBodyHas(body, sub string) bool {
-	return len(body) > 0 && len(sub) > 0 && contains(body, sub)
-}
-
-func contains(s, sub string) bool {
-	for i := 0; i+len(sub) <= len(s); i++ {
-		if s[i:i+len(sub)] == sub {
-			return true
-		}
-	}
-	return false
+	return len(body) > 0 && len(sub) > 0 && strings.Contains(body, sub)
 }

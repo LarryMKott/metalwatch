@@ -28,11 +28,11 @@ func NewRouter(d *app.Deps) *gin.Engine {
 	//
 	// 这里**不做**「没传主密钥就跳过鉴权」的兜底：主密钥缺失时会话本来也签不出来，
 	// 与其静默放行造成裸奔，不如让登录直接失败暴露配置问题。
-	v1.Use(Auth(AuthConfig{
+	v1.Use(NewAuthenticator(AuthConfig{
 		MasterKey: d.MasterKey,
 		Store:     d.Store,
 		Log:       d.Log,
-	}))
+	}).Middleware())
 
 	// 各路由域各自持有自己的路由表：构造注入依赖 → Register 挂路由
 	handler.NewSystemHandler(d.Store, d.TSDB, d.Pool, d.Config, d.Version, d.Started).

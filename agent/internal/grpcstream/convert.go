@@ -1,7 +1,6 @@
 package grpcstream
 
 import (
-	"fmt"
 	"strings"
 	"time"
 
@@ -82,9 +81,4 @@ func toProtoReport(rep model.Report, batchID string, at time.Time) *gen.AgentRep
 // heartbeatReport 构造流上保活用的心跳消息。
 func heartbeatReport(at time.Time) *gen.AgentReport {
 	return &gen.AgentReport{Kind: "heartbeat", Timestamp: at.UnixMilli()}
-}
-
-// newBatchID 生成幂等键：纳秒时间戳（与 JSON 通道同格式，便于服务端统一去重）。
-func newBatchID() string {
-	return fmt.Sprintf("%d-%08x", time.Now().UTC().UnixNano(), uint32(time.Now().UTC().UnixMicro()))
 }

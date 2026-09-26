@@ -13,6 +13,9 @@ import (
 	"time"
 
 	"github.com/LarryMKott/metalwatch/internal/adapter"
+	"github.com/LarryMKott/metalwatch/pkg/ptr"
+	"github.com/LarryMKott/metalwatch/pkg/strs"
+	"github.com/LarryMKott/metalwatch/pkg/timex"
 )
 
 // 领域错误：API 层据此映射 HTTP 状态码。
@@ -86,15 +89,15 @@ func (s *HostService) Create(ctx context.Context, in CreateHostInput) (*adapter.
 	h := &adapter.Host{
 		Hostname:     strings.TrimSpace(in.Hostname),
 		PrimaryIP:    strings.TrimSpace(in.PrimaryIP),
-		BMCIP:        trimPtr(in.BMCIP),
-		SN:           trimPtr(in.SN),
-		SMBIOSUUID:   trimPtr(in.SMBIOSUUID),
-		Site:         trimPtr(in.Site),
-		Rack:         trimPtr(in.Rack),
+		BMCIP:        ptr.Trim(in.BMCIP),
+		SN:           ptr.Trim(in.SN),
+		SMBIOSUUID:   ptr.Trim(in.SMBIOSUUID),
+		Site:         ptr.Trim(in.Site),
+		Rack:         ptr.Trim(in.Rack),
 		RackUnit:     in.RackUnit,
-		OSType:       defaultString(in.OSType, "unknown"),
-		OSVersion:    trimPtr(in.OSVersion),
-		Remark:       trimPtr(in.Remark),
+		OSType:       strs.OrDefault(in.OSType, "unknown"),
+		OSVersion:    ptr.Trim(in.OSVersion),
+		Remark:       ptr.Trim(in.Remark),
 		CollectAgent: true,
 		CollectIPMI:  in.CollectIPMI,
 		Status:       "unknown",
@@ -152,7 +155,7 @@ func (s *HostService) Delete(ctx context.Context, id int64) error {
 	}
 
 	if s.alerts != nil {
-		n, err := s.alerts.ResolveByHost(ctx, id, formatUTC(time.Now()))
+		n, err := s.alerts.ResolveByHost(ctx, id, timex.RFC3339(time.Now()))
 		if err != nil {
 			// 收尾失败就不删：宁可让用户重试，也不留下再也关联不回来的 firing 行
 			return fmt.Errorf("解除主机 %d 的告警失败，已取消删除: %w", id, err)
@@ -191,29 +194,11 @@ func validateCreateHost(in CreateHostInput) error {
 			return fmt.Errorf("%w: bmc_ip %q 不是合法的 IP 地址", ErrInvalidInput, *in.BMCIP)
 		}
 	}
-	if osType := defaultString(in.OSType, "unknown"); !validOSType[osType] {
+	if osType := strs.OrDefault(in.OSType, "unknown"); !validOSType[osType] {
 		return fmt.Errorf("%w: os_type 只能是 linux/windows/unknown", ErrInvalidInput)
 	}
 	if in.RackUnit != nil && (*in.RackUnit < 1 || *in.RackUnit > 60) {
 		return fmt.Errorf("%w: rack_unit 需在 1~60 之间", ErrInvalidInput)
 	}
 	return nil
-}
-
-func trimPtr(v *string) *string {
-	if v == nil {
-		return nil
-	}
-	t := strings.TrimSpace(*v)
-	if t == "" {
-		return nil
-	}
-	return &t
-}
-
-func defaultString(v, def string) string {
-	if strings.TrimSpace(v) == "" {
-		return def
-	}
-	return strings.TrimSpace(v)
 }

@@ -4,6 +4,7 @@ import (
 	"context"
 	"log/slog"
 	"net/http"
+	"strconv"
 	"strings"
 	"time"
 
@@ -25,9 +26,12 @@ import (
 //     新增接口默认受保护，不会因为漏写判断而裸奔
 //   - 审计由中间件统一记录写操作与登录结果
 
-// adminOnly 是「仅管理员」路由（method + gin 路由模板）。
+// defaultAdminOnly 是默认的「仅管理员」路由表（method + gin 路由模板）。
 // 依据契约权限矩阵：主机增删 / BMC 凭据 / 用户 / Token / 明文导出。
-var adminOnly = map[string]bool{
+//
+// ⚠️ 新增高危接口必须在这里登记。授权判定的默认档是「写操作 operator+」，
+// 漏登记的后果是普通 operator 也能改，且不会有任何报错提醒。
+var defaultAdminOnly = map[string]bool{
 	"POST /api/v1/hosts":            true, // 手工录入主机
 	"DELETE /api/v1/hosts/:id":      true,
 	"PUT /api/v1/hosts/:id/bmc":     true, // BMC 凭据（明文口令，必须收口）
@@ -43,34 +47,69 @@ var adminOnly = map[string]bool{
 	"GET /api/v1/assets/export":     true,
 }
 
-// publicRoutes 是免鉴权路由：登录必须公开，否则无人能拿到令牌。
-var publicRoutes = map[string]bool{
+// defaultPublicRoutes 是默认的免鉴权路由：登录必须公开，否则无人能拿到令牌。
+var defaultPublicRoutes = map[string]bool{
 	"POST /api/v1/auth/login": true,
 }
 
-// AuthConfig 是鉴权中间件依赖。
+// AuthConfig 是鉴权中间件的构造入参。
 type AuthConfig struct {
 	MasterKey []byte
 	Store     adapter.MetadataStore
 	Log       *slog.Logger
 }
 
-// Auth 是管理接口的鉴权 + 授权 + 审计中间件，挂在 /api/v1 组上。
-// Agent 通道（/api/v1/agent/*）用自己的 Bearer 校验，不经过这里。
-func Auth(cfg AuthConfig) gin.HandlerFunc {
-	if cfg.Log == nil {
-		cfg.Log = slog.Default()
-	}
-	guard := authz.NewLoginGuard()
+// Authenticator 是管理接口的鉴权 + 授权 + 审计中间件。
+//
+// 用类型而不是「包级函数 + 包级白名单」的理由有二：
+//
+//   - 授权表原本是包级 var，等于把「哪些路由要管理员」变成进程级可变状态，
+//     测试与其它装配方都无法替换成自己的策略；
+//   - authenticate / audit 原先要把 AuthConfig 作为参数在自由函数间一路透传
+//     （典型的「参数比逻辑多」），收进方法集后依赖只在构造时确定一次。
+type Authenticator struct {
+	masterKey []byte
+	store     adapter.MetadataStore
+	log       *slog.Logger
 
+	// guard 是登录失败限流器，整个中间件共用一份计数。
+	guard *authz.LoginGuard
+
+	// adminOnly / publicRoutes 是本实例生效的授权表（默认取包级默认值）。
+	adminOnly    map[string]bool
+	publicRoutes map[string]bool
+}
+
+// NewAuthenticator 构造鉴权中间件。
+//
+// 这里**不做**「没传主密钥就跳过鉴权」的兜底：主密钥缺失时会话本来也签不出来，
+// 与其静默放行造成裸奔，不如让登录直接失败暴露配置问题。
+func NewAuthenticator(cfg AuthConfig) *Authenticator {
+	log := cfg.Log
+	if log == nil {
+		log = slog.Default()
+	}
+	return &Authenticator{
+		masterKey:    cfg.MasterKey,
+		store:        cfg.Store,
+		log:          log,
+		guard:        authz.NewLoginGuard(),
+		adminOnly:    defaultAdminOnly,
+		publicRoutes: defaultPublicRoutes,
+	}
+}
+
+// Middleware 返回挂到 /api/v1 组上的处理器。
+// Agent 通道（/api/v1/agent/*）用自己的 Bearer 校验，不经过这里。
+func (a *Authenticator) Middleware() gin.HandlerFunc {
 	return func(c *gin.Context) {
 		route := c.Request.Method + " " + c.FullPath()
 
-		if publicRoutes[route] {
+		if a.publicRoutes[route] {
 			// 登录接口本身也要防爆破：失败达阈值后一段时间内直接拒绝
 			ip := c.ClientIP()
-			if !guard.Allow(c, ip, func(retryAfter int) {
-				c.Header("Retry-After", itoa(retryAfter))
+			if !a.guard.Allow(c, ip, func(retryAfter int) {
+				c.Header("Retry-After", strconv.Itoa(retryAfter))
 				c.AbortWithStatusJSON(http.StatusTooManyRequests, utils.ErrorBody{
 					Code:      "too_many_attempts",
 					Message:   "登录失败次数过多，请稍后再试",
@@ -79,24 +118,24 @@ func Auth(cfg AuthConfig) gin.HandlerFunc {
 			}) {
 				return
 			}
-			authz.SetGuard(c, guard)
+			authz.SetGuard(c, a.guard)
 			c.Next()
 			return
 		}
 
-		sub, ok := authenticate(c, cfg)
+		sub, ok := a.authenticate(c)
 		if !ok {
 			return // 失败响应已写入
 		}
 		authz.SetSubject(c, sub)
 
-		if adminOnly[route] && !sub.IsAdmin() {
-			audit(c, cfg, sub, "denied", "权限不足：该操作仅管理员可用")
+		if a.adminOnly[route] && !sub.IsAdmin() {
+			a.audit(c, sub, "denied", "权限不足：该操作仅管理员可用")
 			utils.Forbidden(c, "forbidden_scope", "该操作仅管理员可用")
 			return
 		}
 		if !authz.IsReadOnly(c.Request.Method) && !sub.CanWrite() {
-			audit(c, cfg, sub, "denied", "权限不足：当前角色为只读")
+			a.audit(c, sub, "denied", "权限不足：当前角色为只读")
 			utils.Forbidden(c, "forbidden_scope", "当前角色无写操作权限")
 			return
 		}
@@ -109,13 +148,13 @@ func Auth(cfg AuthConfig) gin.HandlerFunc {
 			if c.Writer.Status() >= 400 {
 				result = "fail"
 			}
-			audit(c, cfg, sub, result, "")
+			a.audit(c, sub, result, "")
 		}
 	}
 }
 
 // authenticate 先按会话令牌解析，失败再按开放接口令牌解析。
-func authenticate(c *gin.Context, cfg AuthConfig) (*authz.Subject, bool) {
+func (a *Authenticator) authenticate(c *gin.Context) (*authz.Subject, bool) {
 	token := bearerFrom(c)
 	if token == "" {
 		utils.Unauthorized(c, "unauthorized", "缺少 Bearer 令牌")
@@ -123,11 +162,11 @@ func authenticate(c *gin.Context, cfg AuthConfig) (*authz.Subject, bool) {
 	}
 
 	// 1) 登录会话令牌
-	if s, err := crypto.VerifySession(cfg.MasterKey, token); err == nil {
+	if s, err := crypto.VerifySession(a.masterKey, token); err == nil {
 		sub := &authz.Subject{Kind: "user", UserID: s.UserID, Username: s.Username, Role: s.Role}
 		// 会话签发后角色可能已被改：以库里为准，防止权限回收后旧令牌仍生效
-		if cfg.Store != nil {
-			u, err := cfg.Store.Users().Get(c.Request.Context(), s.UserID)
+		if a.store != nil {
+			u, err := a.store.Users().Get(c.Request.Context(), s.UserID)
 			if err != nil {
 				utils.Fail(c, err)
 				return nil, false
@@ -149,11 +188,11 @@ func authenticate(c *gin.Context, cfg AuthConfig) (*authz.Subject, bool) {
 	}
 
 	// 2) 开放接口令牌（只读）：库里只存 SHA-256 摘要
-	if cfg.Store == nil {
+	if a.store == nil {
 		utils.Unauthorized(c, "unauthorized", "令牌无效")
 		return nil, false
 	}
-	tk, err := cfg.Store.APITokens().GetByHash(c.Request.Context(), crypto.HashToken(token))
+	tk, err := a.store.APITokens().GetByHash(c.Request.Context(), crypto.HashToken(token))
 	if err != nil || tk == nil {
 		utils.Unauthorized(c, "unauthorized", "令牌无效")
 		return nil, false
@@ -172,7 +211,7 @@ func authenticate(c *gin.Context, cfg AuthConfig) (*authz.Subject, bool) {
 	}
 	// last_used_at 只做分钟级回写，避免每个请求都产生一次 UPDATE
 	if tk.LastUsedAt == nil || time.Since(*tk.LastUsedAt) > time.Minute {
-		_ = cfg.Store.APITokens().TouchUsed(c.Request.Context(), tk.ID, time.Now().UTC())
+		_ = a.store.APITokens().TouchUsed(c.Request.Context(), tk.ID, time.Now().UTC())
 	}
 	return sub, true
 }
@@ -191,19 +230,21 @@ func bearerFrom(c *gin.Context) string {
 	return ""
 }
 
-// ---------- 审计 ----------
-
 // audit 落一条审计记录。审计失败只记日志，绝不阻断业务请求。
-func audit(c *gin.Context, cfg AuthConfig, sub *authz.Subject, result, note string) {
-	if cfg.Store == nil {
+func (a *Authenticator) audit(c *gin.Context, sub *authz.Subject, result, note string) {
+	if a.store == nil {
 		return
 	}
 	detail := ""
 	if note != "" {
-		detail = `{"note":"` + note + `","status":` + itoa(c.Writer.Status()) + "}"
+		detail = `{"note":"` + note + `","status":` + strconv.Itoa(c.Writer.Status()) + "}"
+	}
+	username := ""
+	if sub != nil {
+		username = sub.Username
 	}
 	rec := &adapter.AuditLog{
-		Username:   usernameOf(sub),
+		Username:   username,
 		Action:     authz.ActionFor(c.Request.Method, c.FullPath()),
 		TargetType: "http",
 		TargetID:   c.FullPath(),
@@ -215,38 +256,10 @@ func audit(c *gin.Context, cfg AuthConfig, sub *authz.Subject, result, note stri
 		id := sub.UserID
 		rec.UserID = &id
 	}
+	// 用独立 context：请求可能已经结束，用请求 ctx 会直接失败。
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 	defer cancel()
-	if err := cfg.Store.AuditLogs().Append(ctx, rec); err != nil {
-		cfg.Log.Warn("审计写入失败", "action", rec.Action, "err", err)
+	if err := a.store.AuditLogs().Append(ctx, rec); err != nil {
+		a.log.Warn("审计写入失败", "action", rec.Action, "err", err)
 	}
-}
-
-func usernameOf(sub *authz.Subject) string {
-	if sub == nil {
-		return ""
-	}
-	return sub.Username
-}
-
-func itoa(n int) string {
-	if n == 0 {
-		return "0"
-	}
-	neg := n < 0
-	if neg {
-		n = -n
-	}
-	var buf [20]byte
-	i := len(buf)
-	for n > 0 {
-		i--
-		buf[i] = byte('0' + n%10)
-		n /= 10
-	}
-	s := string(buf[i:])
-	if neg {
-		return "-" + s
-	}
-	return s
 }

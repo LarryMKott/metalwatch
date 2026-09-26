@@ -4,6 +4,7 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/LarryMKott/metalwatch/internal/adapter"
@@ -59,7 +60,7 @@ func TestEnsureFirstAdminCreatesOnce(t *testing.T) {
 	if err != nil {
 		t.Fatalf("应写出初始口令文件: %v", err)
 	}
-	if !contains(string(raw), service.BootstrapAdminUser) {
+	if !strings.Contains(string(raw), service.BootstrapAdminUser) {
 		t.Fatalf("口令文件应包含账号名: %s", raw)
 	}
 
@@ -120,45 +121,16 @@ func TestEnsureFirstAdminPasswordIsRandom(t *testing.T) {
 
 // ---------- 辅助 ----------
 
-func contains(s, sub string) bool {
-	for i := 0; i+len(sub) <= len(s); i++ {
-		if s[i:i+len(sub)] == sub {
-			return true
-		}
-	}
-	return false
-}
-
 // extractPassword 从引导文件里取出 password: 后的内容。
 func extractPassword(body string) string {
 	const marker = "password: "
-	i := indexOf(body, marker)
+	i := strings.Index(body, marker)
 	if i < 0 {
 		return ""
 	}
 	rest := body[i+len(marker):]
-	if j := indexOf(rest, "\n"); j >= 0 {
+	if j := strings.Index(rest, "\n"); j >= 0 {
 		rest = rest[:j]
 	}
-	return trimSpace(rest)
-}
-
-func indexOf(s, sub string) int {
-	for i := 0; i+len(sub) <= len(s); i++ {
-		if s[i:i+len(sub)] == sub {
-			return i
-		}
-	}
-	return -1
-}
-
-func trimSpace(s string) string {
-	start, end := 0, len(s)
-	for start < end && (s[start] == ' ' || s[start] == '\t' || s[start] == '\r' || s[start] == '\n') {
-		start++
-	}
-	for end > start && (s[end-1] == ' ' || s[end-1] == '\t' || s[end-1] == '\r' || s[end-1] == '\n') {
-		end--
-	}
-	return s[start:end]
+	return strings.TrimSpace(rest)
 }

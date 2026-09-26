@@ -132,7 +132,7 @@ type ReportPayload struct {
 // 断网策略：先尝试直发；网络类错误则写入 spool 目录，等待恢复后续传（不阻塞采集循环）。
 func (c *Client) Report(ctx context.Context, hostID int64, rep model.Report) error {
 	payload := ReportPayload{
-		BatchID:     newBatchID(),
+		BatchID:     model.NewBatchID(),
 		HostID:      hostID,
 		Mode:        rep.Mode,
 		CollectedAt: time.Now().UTC().Format(time.RFC3339),
@@ -233,7 +233,7 @@ type HTTPError struct {
 }
 
 func (e *HTTPError) Error() string {
-	return fmt.Sprintf("服务端返回 %d: %s", e.Status, trim(e.Body, 200))
+	return fmt.Sprintf("服务端返回 %d: %s", e.Status, ellipsize(e.Body, 200))
 }
 
 // isNetworkError 判断是否属于「稍后重试可能成功」的网络错误。
@@ -292,12 +292,9 @@ func (c *Client) tokenFile() string {
 	return filepath.Join(filepath.Dir(c.opt.SpoolDir), "token")
 }
 
-func newBatchID() string {
-	now := time.Now().UTC()
-	return fmt.Sprintf("%d-%08x", now.UnixNano(), uint32(now.UnixMicro()))
-}
-
-func trim(s string, n int) string {
+// ellipsize 截断到 n 字节并补省略号（原函数名为此处的 trim，但它并不去空白，
+// 叫 trim 会让人以为是 strings.TrimSpace）。
+func ellipsize(s string, n int) string {
 	if len(s) <= n {
 		return s
 	}

@@ -15,6 +15,8 @@ import (
 	"github.com/LarryMKott/metalwatch/internal/task"
 	"github.com/LarryMKott/metalwatch/pkg/crypto"
 	"github.com/LarryMKott/metalwatch/pkg/ipmi"
+	"github.com/LarryMKott/metalwatch/pkg/ptr"
+	"github.com/LarryMKott/metalwatch/pkg/strs"
 )
 
 // IPMIExecutorFactory 构造 ipmi.Executor（生产用 CommandExecutor 跑真实 ipmitool；
@@ -63,7 +65,7 @@ func (p *IPMIPoller) SyncTargets(ctx context.Context) error {
 		want[h.ID] = true
 		if !p.hasTarget(h.ID) {
 			id := h.ID
-			hostname, bmcIP := h.Hostname, derefString(h.BMCIP)
+			hostname, bmcIP := h.Hostname, ptr.Deref(h.BMCIP)
 			p.sched.AddTarget(engine.CollectionTask{
 				ID:   targetID(h.ID),
 				Kind: engine.KindSensor,
@@ -113,7 +115,7 @@ func (p *IPMIPoller) pollHost(ctx context.Context, hostID int64, hostname, bmcIP
 		HostID: hostID, Mode: "ipmi", StartedAt: started,
 	}
 	fail := func(state, code string, err error) error {
-		msg := truncateStr(err.Error(), 500)
+		msg := strs.Truncate(err.Error(), 500)
 		codeCopy, msgCopy := code, msg
 		run.State, run.ErrorCode, run.ErrorMsg = state, &codeCopy, &msgCopy
 		run.FinishedAt = time.Now().UTC()
@@ -221,20 +223,6 @@ func sensorToSample(r ipmi.SensorReading, hostID int64, hostname string) (adapte
 	}, true
 }
 
-func derefString(s *string) string {
-	if s == nil {
-		return ""
-	}
-	return *s
-}
-
-func truncateStr(s string, n int) string {
-	if len(s) <= n {
-		return s
-	}
-	return s[:n]
-}
-
 // TestConnection 对一台主机做最轻量的带外连通性检查（读电源状态）。
 // 经任务池执行以尊重同 BMC 串行与退避约束；凭据解密失败/带外不可达返回错误。
 func (p *IPMIPoller) TestConnection(ctx context.Context, hostID int64) (map[string]any, error) {
@@ -257,7 +245,7 @@ func (p *IPMIPoller) TestConnection(ctx context.Context, hostID int64) (map[stri
 		if p.newExec != nil {
 			exec = p.newExec()
 		}
-		client := ipmi.NewClient(exec, derefString(host.BMCIP), cred.Username, string(pass))
+		client := ipmi.NewClient(exec, ptr.Deref(host.BMCIP), cred.Username, string(pass))
 		state, err := client.PowerState(ctx)
 		if err != nil {
 			return err
@@ -273,7 +261,7 @@ func (p *IPMIPoller) TestConnection(ctx context.Context, hostID int64) (map[stri
 		return nil, err
 	}
 	return map[string]any{
-		"ok": true, "host_id": hostID, "bmc_ip": derefString(host.BMCIP), "power": power,
+		"ok": true, "host_id": hostID, "bmc_ip": ptr.Deref(host.BMCIP), "power": power,
 	}, nil
 }
 
@@ -283,7 +271,7 @@ func (p *IPMIPoller) PollNow(ctx context.Context, hostID int64) error {
 	if err != nil {
 		return err
 	}
-	return p.pollHost(ctx, hostID, host.Hostname, derefString(host.BMCIP))
+	return p.pollHost(ctx, hostID, host.Hostname, ptr.Deref(host.BMCIP))
 }
 
 // TargetCount 返回当前登记的带外采集目标数。

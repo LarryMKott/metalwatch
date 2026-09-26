@@ -13,6 +13,8 @@ import (
 	"github.com/LarryMKott/metalwatch/internal/adapter"
 	"github.com/LarryMKott/metalwatch/internal/engine"
 	"github.com/LarryMKott/metalwatch/internal/notify"
+	"github.com/LarryMKott/metalwatch/pkg/ptr"
+	"github.com/LarryMKott/metalwatch/pkg/timex"
 )
 
 // Notifier 是出站通知的抽象（由 notify.Notifier 实现，docs/04 §5）。
@@ -291,7 +293,7 @@ func (s *AlertService) Evaluate(ctx context.Context, hostID int64, hostname stri
 	es := make([]engine.Sample, 0, len(samples))
 	for _, sm := range samples {
 		obj := objectOf(sm.Labels)
-		valueOf[sm.Metric+"\x1f"+obj] = sm.Value
+		valueOf[sm.Metric+keySep+obj] = sm.Value
 		es = append(es, engine.Sample{
 			Metric: sm.Metric, Value: sm.Value, Host: hostname, Object: obj, At: at,
 		})
@@ -304,12 +306,12 @@ func (s *AlertService) Evaluate(ctx context.Context, hostID int64, hostname stri
 		if !ok {
 			continue
 		}
-		val := valueOf[meta.metric+"\x1f"+ev.Object]
+		val := valueOf[meta.metric+keySep+ev.Object]
 
 		switch ev.State {
 		case engine.StateFiring:
 			e := s.toEvent(ev, meta, hostID, hostname, val)
-			created, id, err := s.alerts.UpsertFiring(ctx, e, ev.ActiveKey, formatUTC(at))
+			created, id, err := s.alerts.UpsertFiring(ctx, e, ev.ActiveKey, timex.RFC3339(at))
 			if err != nil {
 				s.log.Warn("告警事件写入失败", "key", ev.ActiveKey, "err", err)
 				continue
@@ -322,7 +324,7 @@ func (s *AlertService) Evaluate(ctx context.Context, hostID int64, hostname stri
 				s.dispatch(ctx, e, "alert.firing", at)
 			}
 		case engine.StateRecovered:
-			resolved, err := s.alerts.Resolve(ctx, ev.ActiveKey, formatUTC(at))
+			resolved, err := s.alerts.Resolve(ctx, ev.ActiveKey, timex.RFC3339(at))
 			if err != nil {
 				s.log.Warn("告警恢复写入失败", "key", ev.ActiveKey, "err", err)
 				continue
@@ -335,11 +337,11 @@ func (s *AlertService) Evaluate(ctx context.Context, hostID int64, hostname stri
 			}
 		case engine.StateSuppressed:
 			// 抑制窗口内重复触发：仅刷新既有 firing 行的 last_seen，不产生新行
-			if err := s.alerts.Touch(ctx, ev.ActiveKey, formatUTC(at), &val); err != nil {
+			if err := s.alerts.Touch(ctx, ev.ActiveKey, timex.RFC3339(at), &val); err != nil {
 				s.log.Warn("告警刷新失败", "key", ev.ActiveKey, "err", err)
 			}
 		case engine.StateMuted:
-			if err := s.alerts.InsertSilenced(ctx, s.toEvent(ev, meta, hostID, hostname, val), formatUTC(at)); err != nil {
+			if err := s.alerts.InsertSilenced(ctx, s.toEvent(ev, meta, hostID, hostname, val), timex.RFC3339(at)); err != nil {
 				s.log.Warn("维护窗口事件写入失败", "key", ev.ActiveKey, "err", err)
 			}
 		}
@@ -366,7 +368,7 @@ func (s *AlertService) toEvent(ev engine.AlarmEvent, meta ruleMeta, hostID int64
 	return &adapter.AlertEvent{
 		HostID: host, Severity: sev, Category: meta.category,
 		Metric: &meta.metric, ObjectName: objPtr, Value: &val, Threshold: &meta.threshold,
-		Title: title, Detail: ptrString(string(detail)), State: ev.State,
+		Title: title, Detail: ptr.Of(string(detail)), State: ev.State,
 	}
 }
 
@@ -407,10 +409,6 @@ func opText(op string, threshold float64) string {
 func formatValue(v float64) string {
 	return fmt.Sprintf("%g", v)
 }
-
-func formatUTC(t time.Time) string { return t.UTC().Format(time.RFC3339) }
-
-func ptrString(s string) *string { return &s }
 
 // dispatch 把一次状态变化推给 WebSocket 与 Webhook 通道（均允许未启用）。
 // 通知失败只记日志：通知链路故障不应影响采集与判定主链路。
@@ -464,9 +462,9 @@ func (s *AlertService) RaiseAgentOffline(ctx context.Context, host *adapter.Host
 		Value:     &val,
 		Threshold: &threshold,
 		Title:     fmt.Sprintf("Agent 离线：%s 超过 2×采集周期未上报", host.Hostname),
-		Detail:    ptrString(fmt.Sprintf(`{"host_id":%d,"last_seen_at":%q}`, host.ID, formatUTC(at))),
+		Detail:    ptr.Of(fmt.Sprintf(`{"host_id":%d,"last_seen_at":%q}`, host.ID, timex.RFC3339(at))),
 	}
-	created, id, err := s.alerts.UpsertFiring(ctx, e, agentOfflineKey(host.ID), formatUTC(at))
+	created, id, err := s.alerts.UpsertFiring(ctx, e, agentOfflineKey(host.ID), timex.RFC3339(at))
 	if err != nil {
 		return err
 	}
@@ -481,7 +479,7 @@ func (s *AlertService) RaiseAgentOffline(ctx context.Context, host *adapter.Host
 
 // ResolveAgentOffline 解除 Agent 离线告警（恢复上报后调用），返回是否确有解除。
 func (s *AlertService) ResolveAgentOffline(ctx context.Context, host *adapter.Host, at time.Time) (bool, error) {
-	resolved, err := s.alerts.Resolve(ctx, agentOfflineKey(host.ID), formatUTC(at))
+	resolved, err := s.alerts.Resolve(ctx, agentOfflineKey(host.ID), timex.RFC3339(at))
 	if err != nil {
 		return false, err
 	}

@@ -15,6 +15,7 @@ import (
 	"hash/fnv"
 	"math"
 	"sort"
+	"strconv"
 	"sync"
 
 	mwpb "github.com/LarryMKott/metalwatch/proto/gen"
@@ -251,9 +252,9 @@ func fingerprint(probes []*mwpb.LinkProbe) string {
 		_, _ = hasher.Write([]byte{0})
 		_, _ = hasher.Write([]byte(p.ToAgent))
 		_, _ = hasher.Write([]byte{0})
-		_, _ = hasher.Write([]byte(itoa(int(p.RttMs))))
+		_, _ = hasher.Write([]byte(strconv.Itoa(int(p.RttMs))))
 		_, _ = hasher.Write([]byte{0})
-		_, _ = hasher.Write([]byte(itoa(int(p.LossRate * 1e6))))
+		_, _ = hasher.Write([]byte(strconv.Itoa(int(p.LossRate * 1e6))))
 		_, _ = hasher.Write([]byte{0})
 		if p.Direct {
 			_, _ = hasher.Write([]byte{1})
@@ -261,28 +262,6 @@ func fingerprint(probes []*mwpb.LinkProbe) string {
 		_, _ = hasher.Write([]byte{0})
 	}
 	return string(hasher.Sum(nil))
-}
-
-func itoa(v int) string {
-	if v == 0 {
-		return "0"
-	}
-	neg := v < 0
-	if neg {
-		v = -v
-	}
-	buf := [20]byte{}
-	i := len(buf)
-	for v > 0 {
-		i--
-		buf[i] = byte('0' + v%10)
-		v /= 10
-	}
-	if neg {
-		i--
-		buf[i] = '-'
-	}
-	return string(buf[i:])
 }
 
 // ---- 索引最小堆（Dijkstra 用，带 decrease-key） ----

@@ -13,6 +13,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"strconv"
 	"strings"
 	"sync"
 
@@ -61,26 +62,12 @@ func Rebind(query string, d Dialect) string {
 		if query[i] == '?' {
 			n++
 			b.WriteByte('$')
-			b.WriteString(itoa(n))
+			b.WriteString(strconv.Itoa(n))
 			continue
 		}
 		b.WriteByte(query[i])
 	}
 	return b.String()
-}
-
-func itoa(n int) string {
-	if n == 0 {
-		return "0"
-	}
-	var buf [20]byte
-	i := len(buf)
-	for n > 0 {
-		i--
-		buf[i] = byte('0' + n%10)
-		n /= 10
-	}
-	return string(buf[i:])
 }
 
 // Opener 由各后端实现：负责建立连接并完成方言相关的初始化。
